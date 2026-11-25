@@ -22,6 +22,7 @@ from .bus import Bus
 from .connectors import VENUES
 from .engine import ConfigError, Engine
 from .lead import Lead
+from .risk import PROFILES
 from .security import Vault
 from .storage import Store
 
@@ -93,7 +94,9 @@ def create_app() -> FastAPI:
 
     @app.get("/api/catalog")
     def strategies() -> dict:
-        return {"strategies": catalog(), "venues": VENUES}
+        profiles = {k: {"label": p["label"], "hint": p["hint"], "size": p["size"], "limits": p["limits"].to_dict()}
+                    for k, p in PROFILES.items()}
+        return {"strategies": catalog(), "venues": VENUES, "profiles": profiles}
 
     @app.get("/api/messages")
     def messages(limit: int = 200) -> list[dict]:

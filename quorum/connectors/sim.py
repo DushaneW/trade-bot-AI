@@ -19,7 +19,7 @@ DEFAULTS = {
     "SIM-SOL": 150.0,
     "SIM-ACME": 210.0,
     "SIM-EURUSD": 1.085,
-    # Real-looking names for demos and screenshots; prices are still simulated.
+    # Common pair names so screenshots and tests read naturally; prices are still simulated.
     "BTC/USDT": 64000.0,
     "ETH/USDT": 3200.0,
     "SOL/USDT": 150.0,
@@ -100,7 +100,7 @@ class SimConnector(Connector):
     async def history(self, symbol: str, bars: int) -> list[Candle]:
         # A fresh, longer path from the same generator, seeded by length so a run is repeatable.
         # Historical bars are spaced one minute apart so time-based metrics (Sharpe, daily limits)
-        # read like a real 1m chart rather than the 4-second demo clock.
+        # read like a real 1m chart rather than the 4-second live clock of the simulator.
         path = _Path(symbol, DEFAULTS.get(symbol, 100.0), 60.0, bars=bars,
                      seed=f"{symbol}:history:{bars}", keep=bars)
         return path.candles

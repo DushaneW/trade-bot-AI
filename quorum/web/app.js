@@ -200,7 +200,7 @@ function avatar(who, size = "", { dots = false, badge = 0 } = {}) {
 
 function dotsOf(who) {
   return who.role === "trader"
-    ? `<i class="${who.paused_reason || !who.enabled ? "stop" : "ok"}"></i><i class="${who.mode}"></i><i class="${Object.keys(who.positions ?? {}).length ? "ok" : ""}"></i>`
+    ? `<i class="${who.paused_reason || !who.enabled ? "stop" : "ok"}"></i><i class="${Object.keys(who.positions ?? {}).length ? "ok" : ""}"></i><i class="${who.pnl > 0 ? "ok" : who.pnl < 0 ? "stop" : ""}"></i>`
     : `<i class="${who.enabled ? "ok" : ""}"></i><i class="${(who.reputation?.accuracy ?? 0) > 0.55 ? "ok" : ""}"></i><i class="${who.reputation?.calls ? "ok" : ""}"></i>`;
 }
 
@@ -289,6 +289,7 @@ document.addEventListener("pointermove", (e) => {
 });
 document.addEventListener("pointerleave", () => $$("[data-follow] .pupils").forEach((p) => { p.style.setProperty("--px", "0px"); p.style.setProperty("--py", "0px"); }));
 
+const profileLabel = (key) => state.catalog?.profiles?.[key]?.label ?? "Balanced";
 const nameOf = (id) => (id === CHAIR ? "Chair" : bot(id)?.name ?? "Bot");
 const roleOf = (id) => (id === CHAIR ? "Team lead" : ROLE[bot(id)?.strategy] ?? "");
 
@@ -522,7 +523,7 @@ function renderTabs() {
   const o = state.overview;
   const page = (location.hash.slice(2).split(/[/?]/)[0]) || "";
   const pageTab = PAGE_TITLES[page] ? `<div class="tab active"><b>${PAGE_TITLES[page]}</b></div>` : "";
-  const live = o?.totals.live ?? 0;
+  const live = o?.totals.testnet ? "testnet" : "live";
   const sig = JSON.stringify([state.tabs.map((id) => id + nameOf(id)), state.viewing, page]);
   if (sig === tabsSig && $("#tabs .right")) {
     const right = o ? councilControl(o, live) : "";
@@ -574,7 +575,7 @@ function councilControl(o, live) {
     return `<span class="mode-pill idle"><i></i>Council stopped</span>
       <button class="ctl start" id="council" data-to="start"><i></i><span>Start</span></button>`;
   }
-  return `<span class="mode-pill${live ? " live" : ""}"><i></i>${live ? `Real money · ${live} traders` : "Paper trading"} · ${o.totals.running} of ${o.bots.length} active</span>
+  return `<span class="mode-pill${live === "live" ? " live" : ""}"><i></i>${live === "testnet" ? "Trading on testnet" : "Trading real money"} · ${o.totals.running} of ${o.bots.length} active</span>
     <button class="ctl stop" id="council" data-to="stop"><i></i><span>Stop</span></button>`;
 }
 $("#scrim").addEventListener("click", () => { $("#side").classList.remove("open"); $("#scrim").classList.remove("on"); });
@@ -834,7 +835,7 @@ const views = {
       const b = bot(id) ?? detail;
       const acc = account(b.account_id);
       const running = b.enabled && !b.paused_reason;
-      const sig = JSON.stringify([b.name, b.mode, running, Object.keys(b.positions ?? {}).length]);
+      const sig = JSON.stringify([b.name, b.profile, running, Object.keys(b.positions ?? {}).length]);
       if (sig === headSig) return; // unchanged: keep the critter mid-animation
       headSig = sig;
       $("#head", el).innerHTML = `
@@ -842,7 +843,7 @@ const views = {
         <div><h1>${esc(b.name)} <span class="chip">${esc(roleOf(id))}</span></h1>
           <p>${esc(b.title)} on ${esc(acc?.name ?? "")}. ${esc(b.summary)}</p></div>
         <div class="actions">
-          ${trader ? `<div class="seg" role="group" aria-label="Money"><button data-mode="paper" class="${b.mode === "paper" ? "on" : ""}">Paper</button><button data-mode="live" class="${b.mode === "live" ? "on live" : ""}">Real money</button></div>` : ""}
+          ${trader ? `<span class="chip" title="Risk profile">${esc(profileLabel(b.profile))}</span>` : ""}
           <button class="btn" data-act="toggle">${running ? "Pause" : "Resume"}</button>
           ${trader ? `<button class="btn" data-act="limits">Budget & limits</button><a class="btn" href="#/backtest?bot=${id}">Backtest</a>` : ""}
           ${trader && Object.keys(b.positions ?? {}).length ? `<button class="btn" data-act="flatten">Close positions</button>` : ""}
@@ -863,7 +864,7 @@ const views = {
     const line = (m) => {
       const d = m.data;
       if (m.topic === "signal") return `<div class="lead enter"><div class="bubble"><p><b>${esc(sym(d.instrument_key))}</b> ${esc(d.note)} <span class="${fmt.tone(d.direction)}">${fmt.dir(d.direction)}</span></p></div><div class="under">${fmt.clock(m.ts)} · confidence ${Math.round(d.confidence * 100)}%</div></div>`;
-      if (m.topic === "fill") return `<div class="lead enter"><div class="bubble"><p><b>${d.side === "buy" ? "Bought" : "Sold"} ${fmt.qty(d.qty)} ${esc(sym(d.instrument_key))}</b> at ${fmt.price(d.price)}${d.pnl ? ` · <span class="${fmt.tone(d.pnl)}">${fmt.signed(d.pnl)}</span>` : ""}</p><p class="muted">${esc(d.reason)}</p></div><div class="under">${fmt.clock(m.ts)} · ${esc(d.mode)}</div></div>`;
+      if (m.topic === "fill") return `<div class="lead enter"><div class="bubble"><p><b>${d.side === "buy" ? "Bought" : "Sold"} ${fmt.qty(d.qty)} ${esc(sym(d.instrument_key))}</b> at ${fmt.price(d.price)}${d.pnl ? ` · <span class="${fmt.tone(d.pnl)}">${fmt.signed(d.pnl)}</span>` : ""}</p><p class="muted">${esc(d.reason)}</p></div><div class="under">${fmt.clock(m.ts)}</div></div>`;
       if (m.topic === "rejected") return `<div class="lead notice enter"><div class="bubble"><p>Wanted to ${esc(d.side)} ${esc(sym(d.key))}, the risk manager refused: ${esc(d.reason)}.</p></div><div class="under">${fmt.clock(m.ts)}</div></div>`;
       if (m.topic === "bot" && d.event === "paused") return `<div class="lead notice enter"><div class="bubble"><p>Paused by the risk manager: ${esc(d.reason)}</p></div><div class="under">${fmt.clock(m.ts)}</div></div>`;
       return "";
@@ -873,9 +874,20 @@ const views = {
     const thread = $("#thread", el);
     const extras = () => {
       if (!trader) {
-        const r = (bot(id) ?? detail).reputation;
+        const b = bot(id) ?? detail;
+        const r = b.reputation, trust = b.trust ?? { markets: [], regimes: [] };
+        const bar = (row, label) => `<div class="item trust"><span></span><div><b>${esc(label)}</b>
+            <div class="meter"><span style="width:${Math.round(row.accuracy * 100)}%;background:${row.accuracy >= 0.5 ? "var(--up)" : "var(--down)"}"></span></div></div>
+            <span class="${row.accuracy >= 0.5 ? "up" : "down"}">${Math.round(row.accuracy * 100)}% · ${row.calls}</span></div>`;
+        const regimeName = { trend: "When the market trends", chop: "When the market chops sideways" };
         return `<div class="card open"><div class="card-head">Last ${r.history.length} scored calls<span class="meta">${r.hits} right of ${r.calls}</span></div>
-          <div class="card-body"><div><div class="item" style="grid-template-columns:1fr"><div class="calls">${r.history.map((h) => `<i class="${h ? "r" : ""}" title="${h ? "Right" : "Wrong"}"></i>`).join("") || '<span class="muted">Scored 8 bars after each call.</span>'}</div></div></div></div></div>`;
+          <div class="card-body"><div><div class="item" style="grid-template-columns:1fr"><div class="calls">${r.history.map((h) => `<i class="${h ? "r" : ""}" title="${h ? "Right" : "Wrong"}"></i>`).join("") || '<span class="muted">Scored 8 bars after each call.</span>'}</div></div></div></div></div>
+          <div class="card open"><div class="card-head">Where to trust ${esc(b.name)}<span class="meta">right · calls</span></div>
+          <div class="card-body"><div>
+            ${trust.markets.length || trust.regimes.length
+              ? trust.markets.map((m) => bar(m, sym(m.name))).join("") + trust.regimes.map((g) => bar(g, regimeName[g.name] ?? g.name)).join("")
+              : '<div class="item" style="grid-template-columns:1fr"><span class="muted">Each market and market mood gets its own record once calls are scored. Its vote counts for more where it has been right.</span></div>'}
+          </div></div></div>`;
       }
       const b = bot(id) ?? detail;
       const pos = Object.entries(b.positions ?? {});
@@ -898,15 +910,13 @@ const views = {
     };
 
     el.addEventListener("click", async (e) => {
-      const mode = e.target.closest("[data-mode]");
-      if (mode) return switchMode(mode.dataset.mode);
       const act = e.target.closest("[data-act]")?.dataset.act;
       const b = bot(id) ?? detail;
       if (act === "toggle") { const on = !(b.enabled && !b.paused_reason); if (await patch({ enabled: on })) toast(on ? `${b.name} resumed` : `${b.name} paused`); }
       if (act === "flatten") { await api(`/api/bots/${id}/close`, { method: "POST" }); toast("Positions closed"); refresh(); }
       if (act === "limits") editLimits(b);
       if (act === "delete") {
-        const ok = await dialog(`<h2>Delete ${esc(b.name)}?</h2><p>Its trade history stays in the database. Open paper positions are discarded.</p>
+        const ok = await dialog(`<h2>Delete ${esc(b.name)}?</h2><p>Its trade history stays in the database. A trader with open positions has to close them first.</p>
           <div class="actions"><button class="btn ghost" data-close="">Cancel</button><button class="btn danger" data-close="yes">Delete</button></div>`);
         if (!ok) return;
         try { await api(`/api/bots/${id}`, { method: "DELETE" }); state.tabs = state.tabs.filter((t) => t !== id); local.set("tabs", state.tabs); toast(`${b.name} deleted`); await refresh(); location.hash = "#/"; }
@@ -914,25 +924,15 @@ const views = {
       }
     });
 
-    const switchMode = async (mode) => {
-      const b = bot(id) ?? detail;
-      if (mode === b.mode) return;
-      if (mode === "paper") { await patch({ mode }); return; }
-      const ok = await dialog(`
-        <h2>Trade real money?</h2>
-        <p>${esc(b.name)} will place real orders on ${esc(account(b.account_id)?.name ?? "")} with a budget of ${fmt.money(b.budget)}. Paper results are reset so the live numbers stay honest.</p>
-        <label class="check"><input type="checkbox" id="ack"> I understand this bot can lose this money.</label>
-        <div class="actions"><button class="btn ghost" data-close="">Stay on paper</button><button class="btn danger" id="go" disabled>Switch to real money</button></div>`,
-        (d, close) => { $("#ack", d).onchange = (ev) => { $("#go", d).disabled = !ev.target.checked; }; $("#go", d).onclick = () => close("yes"); });
-      if (ok) await patch({ mode: "live", confirm: true });
-    };
-
     const editLimits = async (b) => {
       const L = b.limits;
+      const profiles = state.catalog.profiles;
       const ok = await dialog(`
         <h2>${esc(b.name)}: budget & limits</h2>
         <form class="form" id="lim">
-          <label class="field"><span>Budget</span><input class="input num" name="budget" type="number" min="1" step="any" value="${b.budget}"><small>The most this bot can ever put to work.</small></label>
+          <label class="field"><span>Budget</span><input class="input num" name="budget" type="number" min="1" step="any" value="${b.budget}"><small>The most this trader can ever put to work. Real money on your account.</small></label>
+          <label class="field"><span>Risk profile</span><select class="input" name="profile">${Object.entries(profiles).map(([k, p]) => `<option value="${k}" ${k === b.profile ? "selected" : ""}>${esc(p.label)}: ${esc(p.hint)}</option>`).join("")}</select>
+            <small>Picking a profile fills in the limits below. You can still adjust them.</small></label>
           <div class="two">
             <label class="field"><span>Stop loss %</span><input class="input num" name="stop_loss_pct" type="number" step="0.5" min="0.5" value="${(L.stop_loss_pct * 100).toFixed(1)}"></label>
             <label class="field"><span>Max drawdown %</span><input class="input num" name="max_drawdown_pct" type="number" step="1" min="1" value="${(L.max_drawdown_pct * 100).toFixed(0)}"></label>
@@ -940,11 +940,19 @@ const views = {
             <label class="field"><span>Max per market %</span><input class="input num" name="max_position_pct" type="number" step="5" min="5" max="100" value="${(L.max_position_pct * 100).toFixed(0)}"></label>
           </div>
         </form>
-        <div class="actions"><button class="btn ghost" data-close="">Cancel</button><button class="btn primary" data-close="save">Save</button></div>`);
+        <div class="actions"><button class="btn ghost" data-close="">Cancel</button><button class="btn primary" data-close="save">Save</button></div>`,
+        (d) => {
+          $("select[name=profile]", d).addEventListener("change", (e) => {
+            const p = profiles[e.target.value].limits;
+            for (const k of ["stop_loss_pct", "max_drawdown_pct", "daily_loss_pct", "max_position_pct"]) {
+              $(`input[name=${k}]`, d).value = (p[k] * 100).toFixed(k === "stop_loss_pct" ? 1 : 0);
+            }
+          });
+        });
       if (ok !== "save") return;
       const f = new FormData($("#lim"));
       const limits = Object.fromEntries(["stop_loss_pct", "max_drawdown_pct", "daily_loss_pct", "max_position_pct"].map((k) => [k, Number(f.get(k)) / 100]));
-      if (await patch({ limits, budget: Number(f.get("budget")) })) toast("Saved");
+      if (await patch({ profile: f.get("profile"), limits, budget: Number(f.get("budget")) })) toast("Saved");
     };
 
     const hear = (msg) => {
@@ -1025,7 +1033,7 @@ const views = {
           <a class="btn primary" style="margin-left:auto" href="#/accounts/new">Connect account</a></div>
         <div class="list">${accs.map((a) => `
           <div class="list-row"><div><b>${esc(a.name)}</b> ${statusTag(a)}
-            <small>${esc(a.venue)} · ${esc(a.market)} · ${a.venue === "sim" ? "simulated prices" : a.sandbox ? "testnet or paper account" : "live account"}${a.key_hint ? ` · key ${esc(a.key_hint)}` : ""}</small>
+            <small>${esc(a.venue)} · ${esc(a.market)} · ${a.venue === "sim" ? "simulated prices" : a.sandbox ? "testnet or practice account" : "real account"}${a.key_hint ? ` · key ${esc(a.key_hint)}` : ""}</small>
             <small>${esc(a.error || a.status?.message || "Checking…")}</small>
             <small>${a.symbols.map(esc).join(", ")}</small></div>
             <div style="display:flex;gap:8px"><button class="btn" data-check="${a.id}">Check</button>${a.venue === "sim" ? "" : `<button class="btn danger" data-remove="${a.id}">Remove</button>`}</div></div>`).join("")}</div></div>`;
@@ -1047,8 +1055,8 @@ const views = {
   connect(el) {
     const venues = state.catalog.venues;
     const H = {
-      crypto: { symbols: "BTC/USDT, ETH/USDT, SOL/USDT", key: "API key", secret: "API secret", extra: "Passphrase (OKX, KuCoin and Bitget only)", note: "Leave the keys empty to paper-trade on real prices. When you add keys, enable trading and disable withdrawals." },
-      stocks: { symbols: "AAPL, MSFT, SPY", key: "API key ID", secret: "Secret key", note: "Alpaca paper accounts are free. Alpaca trading keys cannot withdraw money." },
+      crypto: { symbols: "BTC/USDT, ETH/USDT, SOL/USDT", key: "API key", secret: "API secret", extra: "Passphrase (OKX, KuCoin and Bitget only)", note: "Create a key that can trade but cannot withdraw. Tick testnet below to practise with the exchange's fake money first." },
+      stocks: { symbols: "AAPL, MSFT, SPY", key: "API key ID", secret: "Secret key", note: "Alpaca practice (paper) accounts are free and work like a testnet. Alpaca trading keys cannot withdraw money." },
       forex: { symbols: "EUR_USD, GBP_USD, USD_JPY", key: "API token", account: "Account ID, e.g. 101-004-1234567-001", note: "OANDA practice accounts are free. The API cannot withdraw money." },
     };
     let market = "crypto";
@@ -1061,12 +1069,12 @@ const views = {
             <label class="field"><span>Exchange or broker</span><select class="input" name="venue">${venues[market].map((v) => `<option value="${v}">${v}</option>`).join("")}</select></label>
             <label class="field"><span>Name</span><input class="input" name="name" placeholder="Binance sub-account"></label>
           </div>
-          <label class="field"><span>${h.key}</span><input class="input" name="api_key" autocomplete="off" spellcheck="false" ${market === "crypto" ? "" : "required"}></label>
-          ${h.secret ? `<label class="field"><span>${h.secret}</span><input class="input" name="secret" type="password" autocomplete="off" ${market === "crypto" ? "" : "required"}></label>` : ""}
+          <label class="field"><span>${h.key}</span><input class="input" name="api_key" autocomplete="off" spellcheck="false" required></label>
+          ${h.secret ? `<label class="field"><span>${h.secret}</span><input class="input" name="secret" type="password" autocomplete="off" required></label>` : ""}
           ${h.extra ? `<label class="field"><span>${h.extra}</span><input class="input" name="password" type="password" autocomplete="off"></label>` : ""}
           ${h.account ? `<label class="field"><span>${h.account}</span><input class="input" name="account_id" required></label>` : ""}
           <label class="field"><span>Markets to watch</span><input class="input" name="symbols" value="${h.symbols}" required><small>Comma separated, written the way the venue writes them.</small></label>
-          <label class="check"><input type="checkbox" name="sandbox" checked> Use the testnet or paper account</label>
+          <label class="check"><input type="checkbox" name="sandbox" checked> This is a testnet or practice account</label>
           <div class="hint">${h.note}</div>
           <div><button class="btn primary" type="submit">Connect and check</button></div>
         </form></div>`;
@@ -1098,7 +1106,7 @@ const views = {
       pick.strategy ??= list[0]?.key;
       const acc = account(pick.account);
       el.innerHTML = `<div class="page"><h1>New ${pick.role}</h1>
-        <p>${pick.role === "trader" ? "A trader gets its own budget and always starts on paper. Switch it to real money from its page once you trust it." : "An analyst never trades. Its calls feed the council vote, weighted by how often it has been right."}</p>
+        <p>${pick.role === "trader" ? "A trader gets its own budget and places real orders on the account you pick. Use a testnet account to practise." : "An analyst never trades. Its calls feed the council vote, weighted by how often it has been right."}</p>
         <form class="form" id="nb">
           <div class="seg">${["trader", "analyst"].map((r) => `<button type="button" data-r="${r}" class="${r === pick.role ? "on" : ""}">${r === "trader" ? "Trader" : "Analyst"}</button>`).join("")}</div>
           <div class="picks">${list.map((s) => `<button type="button" class="pick${s.key === pick.strategy ? " on" : ""}" data-s="${s.key}">
@@ -1108,7 +1116,10 @@ const views = {
             <label class="field"><span>Name</span><input class="input" name="name" placeholder="${esc(list.find((s) => s.key === pick.strategy)?.persona ?? "")}"></label>
           </div>
           <div class="field"><span>Markets</span><div class="toggles">${(acc?.symbols ?? []).map((s) => `<button type="button" data-sym="${esc(s)}" class="${pick.symbols.has(s) ? "on" : ""}">${esc(s)}</button>`).join("")}</div></div>
-          ${pick.role === "trader" ? `<label class="field" style="max-width:240px"><span>Budget</span><input class="input num" name="budget" type="number" min="1" step="any" value="100" required></label>` : ""}
+          ${pick.role === "trader" ? `<div class="two">
+            <label class="field"><span>Budget</span><input class="input num" name="budget" type="number" min="1" step="any" value="100" required><small>Real money on that account.</small></label>
+            <label class="field"><span>Risk profile</span><select class="input" name="profile">${Object.entries(state.catalog.profiles).map(([k, p]) => `<option value="${k}" ${k === "balanced" ? "selected" : ""}>${esc(p.label)}</option>`).join("")}</select></label>
+          </div>` : ""}
           <div><button class="btn primary" type="submit">Create ${pick.role}</button></div>
         </form></div>`;
       $$("[data-r]", el).forEach((b) => b.addEventListener("click", () => { pick.role = b.dataset.r; pick.strategy = null; render(); }));
@@ -1123,7 +1134,7 @@ const views = {
         e.preventDefault();
         const f = new FormData(e.target);
         try {
-          const b = await api("/api/bots", { method: "POST", body: { strategy: pick.strategy, account_id: pick.account, symbols: [...pick.symbols], name: f.get("name") || undefined, budget: f.get("budget") ? Number(f.get("budget")) : undefined } });
+          const b = await api("/api/bots", { method: "POST", body: { strategy: pick.strategy, account_id: pick.account, symbols: [...pick.symbols], name: f.get("name") || undefined, budget: f.get("budget") ? Number(f.get("budget")) : undefined, profile: f.get("profile") || undefined } });
           await refresh();
           toast(`${b.name} joined the council`);
           location.hash = `#/agent/${b.id}`;
@@ -1144,6 +1155,7 @@ const views = {
       symbols: new Set(fromBot?.symbols ?? account(accs[0]?.id)?.symbols.slice(0, 2) ?? []),
       bars: local.get("btBars", 2000),
       budget: fromBot?.budget ?? 100,
+      profile: fromBot?.profile ?? "balanced",
       params: fromBot?.params, limits: fromBot?.limits, bot_id: fromBot?.id,
     };
     let runs = await api("/api/backtests");
@@ -1163,6 +1175,9 @@ const views = {
           <label class="field"><span>History from</span><select class="input" name="account">${accs.map((a) => `<option value="${a.id}" ${a.id === form.account ? "selected" : ""}>${esc(a.name)} · ${a.market}</option>`).join("")}</select></label>
           <label class="field"><span>Budget</span><input class="input num" name="budget" type="number" min="1" step="any" value="${form.budget}"></label>
         </div>
+        <div class="field"><span>Risk profile</span><div class="seg">${Object.entries(state.catalog.profiles).map(([k, p]) => `<button type="button" data-profile="${k}" class="${k === form.profile ? "on" : ""}">${esc(p.label)}</button>`).join("")}</div>
+          <small>${esc(state.catalog.profiles[form.profile].hint)}</small>
+        </div>
         <div class="field"><span>Markets</span><div class="toggles">${(acc?.symbols ?? []).map((s) => `<button type="button" data-sym="${esc(s)}" class="${form.symbols.has(s) ? "on" : ""}">${esc(s)}</button>`).join("")}</div></div>
         <div class="field"><span>History length</span><div class="seg">${[500, 1000, 2000, 5000].map((b) => `<button type="button" data-bars="${b}" class="${b === form.bars ? "on" : ""}">${b.toLocaleString("en-US")} bars</button>`).join("")}</div>
           <small>Bars use the account's timeframe. Longer history is slower but far more meaningful.</small></div>
@@ -1172,6 +1187,7 @@ const views = {
       $$("[data-s]", el).forEach((b) => b.addEventListener("click", () => { form.strategy = b.dataset.s; form.params = undefined; form.bot_id = undefined; renderForm(); }));
       $$("[data-sym]", el).forEach((b) => b.addEventListener("click", () => { const s = b.dataset.sym; form.symbols.has(s) ? form.symbols.delete(s) : form.symbols.add(s); b.classList.toggle("on"); }));
       $$("[data-bars]", el).forEach((b) => b.addEventListener("click", () => { form.bars = Number(b.dataset.bars); local.set("btBars", form.bars); renderForm(); }));
+      $$("[data-profile]", el).forEach((b) => b.addEventListener("click", () => { form.profile = b.dataset.profile; form.limits = undefined; renderForm(); }));
       $("select[name=account]", el).addEventListener("change", (e) => { form.account = e.target.value; form.symbols.clear(); renderForm(); });
       $("input[name=budget]", el).addEventListener("change", (e) => { form.budget = Number(e.target.value); });
       $("#bt", el).addEventListener("submit", async (e) => {
@@ -1179,7 +1195,7 @@ const views = {
         try {
           const run = await api("/api/backtests", { method: "POST", body: {
             strategy: form.strategy, account_id: form.account, symbols: [...form.symbols], bars: form.bars,
-            budget: form.budget, params: form.params, limits: form.limits, bot_id: form.bot_id } });
+            budget: form.budget, profile: form.profile, params: form.params, limits: form.limits, bot_id: form.bot_id } });
           runs.unshift(run);
           renderRun(run);
           renderPast();
@@ -1230,12 +1246,12 @@ const views = {
             ${r.trade_log.slice(-40).reverse().map((t) => `<div class="item"><span class="st ${t.pnl > 0 ? "ok" : t.pnl < 0 ? "fail" : "idle"}"></span><div style="min-width:0"><b>${t.side === "buy" ? "Buy" : "Sell"} ${esc(t.symbol)}</b> <span class="muted">at ${fmt.price(t.price)}</span><div class="sub"><span>${esc(t.reason)}</span></div></div><span class="${fmt.tone(t.pnl)}">${t.pnl ? fmt.signed(t.pnl) : ""}</span></div>`).join("") || `<div class="empty">No trades. The setup never triggered.</div>`}
           </div></div></div>
         </div>
-        <div class="hint" style="margin-top:12px">A backtest cannot see order-book depth, outages or funding costs, and a strategy tuned to look good on one stretch of history usually disappoints on the next. Treat this as a filter for bad ideas, not proof of a good one. Next step for anything promising: run it on paper.</div>
-        ${detail.bot_id ? "" : `<div style="margin-top:12px"><button class="btn" id="adopt">Create this trader on paper</button></div>`}`;
+        <div class="hint" style="margin-top:12px">A backtest cannot see order-book depth, outages or funding costs, and a strategy tuned to look good on one stretch of history usually disappoints on the next. Treat this as a filter for bad ideas, not proof of a good one. Next step for anything promising: try it on a testnet account.</div>
+        ${detail.bot_id ? "" : `<div style="margin-top:12px"><button class="btn" id="adopt">Hire this trader</button></div>`}`;
       $("#adopt", el)?.addEventListener("click", async () => {
         try {
-          const b = await api("/api/bots", { method: "POST", body: { strategy: r.strategy, account_id: accs.find((a) => a.name === detail.account)?.id ?? form.account, symbols: r.symbols, budget: r.budget } });
-          await refresh(); toast(`${b.name} created on paper`); location.hash = `#/agent/${b.id}`;
+          const b = await api("/api/bots", { method: "POST", body: { strategy: r.strategy, account_id: accs.find((a) => a.name === detail.account)?.id ?? form.account, symbols: r.symbols, budget: r.budget, profile: detail.profile } });
+          await refresh(); toast(`${b.name} joined the team`); location.hash = `#/agent/${b.id}`;
         } catch (err) { toast(err.message, true); }
       });
     };

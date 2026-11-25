@@ -142,14 +142,17 @@ The first time you open Quorum there are no accounts and no bots. The Chair gree
 2. **Where is your account?** Binance, Bybit, OKX, Kraken, Coinbase, KuCoin, Bitget, Gate.io or MEXC. Alpaca for stocks, OANDA for forex.
 3. **Your API key.** It shows where to create one. The key needs to trade but **must not be able to withdraw**. The Chair checks it with the exchange and shows your free balance. The key is stored encrypted and never appears in the chat.
 4. **Which markets?** Only pairs the exchange really lists.
-5. **How much, and is it real money?** Your budget is split across the five traders. Paper means real prices with pretend orders. Real money asks you to confirm.
-6. **Start.** The team is ready but waits until you press *Start the council*.
+5. **How much?** The part of your balance the team may use, say 100 USDT. The rest of your account is never touched. Every trader places real orders, so you confirm that you can lose this money.
+6. **Who trades?** The budget is split evenly between the traders you hire. With a small budget the Chair suggests fewer traders, so every order stays above the exchange minimum. With 100 USDT on Binance it picks four.
+7. **How careful?** Careful, Balanced or Bold. This sets stop losses, position sizes and loss limits, and you can change it per trader later.
+8. **Start.** The team is ready but waits until you press *Start the council*.
 
 After that, type `start` or `stop` to the Chair or use the button at the top. Stopping asks whether to keep
 your positions (their stop losses keep working) or close everything.
 
-> **Never made an API key?** Try a testnet key first. For Binance, sign in at `testnet.binance.vision` with
-> GitHub and generate one. You get fake money and real mechanics. Tick *This is a testnet key* when you paste it.
+> **Want to practise first?** Use a testnet key. For Binance, sign in at `testnet.binance.vision` with GitHub
+> and generate one. The exchange gives you fake money and everything else works exactly like the real thing.
+> Tick *This is a testnet key* when you paste it.
 
 <br>
 
@@ -169,6 +172,23 @@ Every time a candle closes, each analyst gives an opinion on every market. Older
 what really happened, and the vote is updated. Each trader then looks at its own setup plus the vote and
 decides whether to act. Before anything reaches the exchange, the risk manager checks it against that
 trader's limits. Fills are booked in the trader's own ledger, so no trader can touch another one's money.
+
+### How the analysts get smarter
+
+An analyst isn't simply "good" or "bad". Quorum keeps a separate record for every analyst on every market,
+and for two kinds of market mood: trending and choppy.
+
+<img src="docs/trust.png" width="100%" alt="Mason's record per market and per market mood">
+
+Mason above is right 86% of the time on ETH and only 39% on BTC, so its vote carries a lot of weight on ETH
+and very little on BTC. New records start close to the analyst's overall score and earn their own weight as
+calls pile up, so a few lucky guesses can't take over.
+
+Vector also reads two charts at once, the one you trade and one twelve times longer, and speaks up louder when
+both agree. And traders size their entries by how united the team is: a split vote means a smaller position,
+a unanimous one a slightly bigger one.
+
+You can see all of this on each analyst's page under *Where to trust*.
 
 <br>
 
@@ -218,17 +238,26 @@ trade, look happy or worried depending on how they're doing, and fall asleep whe
 
 I'd rather the bot miss a trade than blow up an account, so a lot of Quorum is limits.
 
-Each trader has a **budget** it can never exceed, a **4% stop loss** per position (checked even while the team
-is stopped), a **10% daily loss limit**, a **30% drawdown limit** after which it waits for you, and a **cap of
-half its money per market**. You can change all of them on its page.
+Each trader has a **budget** it can never exceed, a **stop loss** per position (checked even while the team
+is stopped), a **daily loss limit**, a **drawdown limit** after which it waits for you, and a **cap per market**.
+The risk profile sets them for you:
+
+| | Stop loss | Max per market | Daily loss limit | Drawdown limit |
+| --- | --- | --- | --- | --- |
+| **Careful** | 3% | 35% | 6% | 20% |
+| **Balanced** | 4% | 50% | 10% | 30% |
+| **Bold** | 6% | 80% | 15% | 40% |
+
+You can fine-tune any of them on the trader's page.
 
 And a few rules that can't be switched off:
 
 - Nothing runs before you press Start.
-- New bots always start on paper. Real money is something you turn on yourself.
+- The team only ever uses the budget you gave it. The rest of your balance is never touched.
 - Keys that the exchange says can withdraw money are refused.
 - If you mark a key as testnet and the exchange has no testnet, Quorum refuses instead of quietly using your real account.
-- Paper results and real results are never mixed.
+- Orders below the exchange minimum are raised to the minimum when the trader can afford it, and skipped when it can't.
+- When an exchange takes its fee in the coin you bought, Quorum books the smaller amount you really hold, so selling never fails for want of a few satoshis.
 
 <br>
 
@@ -243,8 +272,8 @@ It tries hard to be honest. Decisions use a candle's close and fill at the next 
 peek ahead. Every trade pays fees and slippage. Stops are checked against the candle's low. And you always
 see the result next to simply buying and holding, which is the number most strategies quietly lose to.
 
-A good backtest means "this idea isn't obviously broken". Run anything promising on paper before giving it
-real money.
+A good backtest means "this idea isn't obviously broken". Try anything promising on a testnet account before
+giving it real money.
 
 <br>
 
@@ -268,7 +297,7 @@ Nothing happens unless you click it.
 | | Exchanges and brokers | Practice accounts |
 | --- | --- | --- |
 | **Crypto** | Binance, Bybit, OKX, Kraken, Coinbase, KuCoin, Bitget, Gate.io, MEXC via [ccxt](https://github.com/ccxt/ccxt) | Testnet where the exchange has one |
-| **US stocks** | Alpaca | Free paper accounts |
+| **US stocks** | Alpaca | Free practice accounts |
 | **Forex** | OANDA | Free practice accounts |
 
 <br>
@@ -316,7 +345,7 @@ dashboard and in backtests by itself. New exchange? Implement the four methods i
 <br>
 I can't promise that, and neither can anyone else. Quorum gives you clear rules, an explanation for every trade
 and an honest way to measure how it's really doing. Plenty of strategies lose to just holding when the market
-rises hard, and the backtest page shows you that plainly. Start on paper, then small, with money you can
+rises hard, and the backtest page shows you that plainly. Start on a testnet, then small, with money you can
 afford to lose.
 </details>
 
@@ -346,7 +375,7 @@ question. There's no tracking.
 ## Please read this
 
 Quorum is a tool, not financial advice. Trading is risky, automated trading can lose money faster than you
-would by hand, and past results (paper, backtested or real) don't tell you what happens next. You're
+would by hand, and past results (testnet, backtested or real) don't tell you what happens next. You're
 responsible for your accounts, your keys and every order they place.
 
 <br>

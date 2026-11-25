@@ -112,16 +112,50 @@ class CryptoConnector(Connector):
         except Exception:
             return qty
 
+    def min_order_value(self, symbol: str) -> float:
+        market = (self.ex.markets or {}).get(symbol) or {}
+        return float(((market.get("limits") or {}).get("cost") or {}).get("min") or 0)
+
     async def market_order(self, symbol: str, side: Side, qty: float) -> ExecResult:
         await self._markets()
+        market = self.ex.market(symbol)
+        base, quote = market["base"], market["quote"]
+        if side == Side.SELL:
+            # Never try to sell more than the account holds: fees taken in the base asset or rounding
+            # can leave slightly less than the books expect, and the exchange would reject the whole order.
+            free = float(((await self.ex.fetch_balance()).get("free") or {}).get(base) or 0)
+            qty = min(qty, free)
         qty = self.normalize_qty(symbol, qty)
+        if qty <= 0:
+            raise RuntimeError(f"Nothing to {side.value}: the account holds no free {base}")
+
         o = await self.ex.create_order(symbol, "market", side.value, qty)
+        if not o.get("filled") and o.get("id"):
+            try:
+                o = await self.ex.fetch_order(o["id"], symbol)
+            except Exception:
+                pass  # some venues cannot look up a market order; fall back to what we have
         price = float(o.get("average") or o.get("price") or 0)
         if not price:
-            t = await self.ex.fetch_ticker(symbol)
-            price = float(t["last"])
-        fee = float((o.get("fee") or {}).get("cost") or qty * price * 0.001)
-        return ExecResult(price, float(o.get("filled") or qty), fee)
+            price = float((await self.ex.fetch_ticker(symbol))["last"])
+        filled = float(o.get("filled") or qty)
+
+        fee_quote, fee_base, known = 0.0, 0.0, False
+        for f in (o.get("fees") or ([o["fee"]] if o.get("fee") else [])):
+            cost, currency = float(f.get("cost") or 0), f.get("currency")
+            if not cost:
+                continue
+            known = True
+            if currency == base:
+                fee_base += cost
+                fee_quote += cost * price
+            elif currency == quote:
+                fee_quote += cost
+            else:  # paid in another token (e.g. BNB): count it at the usual taker rate
+                fee_quote += filled * price * 0.001
+        if not known:
+            fee_quote = filled * price * 0.001
+        return ExecResult(price, filled, fee_quote, fee_base)
 
     async def close(self) -> None:
         await self.ex.close()

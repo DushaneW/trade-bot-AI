@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,18 +18,20 @@ from . import indicators as ta
 from .bots import ANALYSTS, STRATEGIES, TRADERS, Analyst, PositionView, Series, Trader
 from .bus import Bus
 from .connectors import Connector, KeyCheck, build
-from .learning import Council, Reputation
+from .learning import Council, Reputation, regime_of
 from .ledger import Ledger
 from .models import Fill, Market, Mode, Side, Signal, new_id, now_ms
-from .risk import RiskLimits, RiskManager
+from .risk import PROFILES, RiskLimits, RiskManager, conviction
 from .security import Vault, mask
 from .storage import Store
 
 log = logging.getLogger(__name__)
 
-PAPER_FEE = 0.001       # 10 bps, a typical taker fee
-PAPER_SLIPPAGE = 0.0005  # 5 bps against us on every paper fill
 EQUITY_EVERY_S = 10
+HISTORY_BARS = 760   # enough for multi-timeframe analysts
+WINDOW_BARS = 220    # what most strategies look at
+PAPER_REMOVED = ("Paper trading was removed in this version. This trader now places real orders, so it was "
+                 "paused. Check its budget, then press Resume.")
 
 
 class ConfigError(ValueError):
@@ -92,7 +94,11 @@ class BotRuntime:
 
     @property
     def mode(self) -> Mode:
-        return Mode(self.config.get("mode", "paper"))
+        return Mode.LIVE  # paper trading was removed; practise on a testnet account instead
+
+    @property
+    def size_mult(self) -> float:
+        return float(self.config.get("size_mult", 1.0))
 
     @property
     def active(self) -> bool:
@@ -113,6 +119,7 @@ class Engine:
         self._task: asyncio.Task | None = None
         self._last_equity = 0.0
         self.running = False  # the owner's go signal; until then nothing analyses or trades
+        self.regime: dict[str, str] = {}  # key -> "trend" | "chop", refreshed every bar
         self.last_said: dict[str, dict[str, Any]] = {}  # bot id -> latest thing it said or did
         bus.subscribe("*", self._remember)
 
@@ -172,22 +179,35 @@ class Engine:
         for acc in self.accounts.values():
             await acc.connector.close()
 
-    def create_team(self, account_id: str, symbols: list[str], budget: float, mode: Mode) -> list[BotRuntime]:
-        """Assemble the standard council on one account: every analyst, every trader, budget split evenly."""
+    def create_team(self, account_id: str, symbols: list[str], budget: float,
+                    traders: list[str] | None = None, profile: str = "balanced") -> list[BotRuntime]:
+        """Assemble the council on one account: every analyst, the chosen traders, budget split evenly."""
         if self.bots:
             raise ConfigError("A team already exists")
-        traders = list(TRADERS)
+        traders = [t for t in (traders or list(TRADERS)) if t in TRADERS]
+        if not traders:
+            raise ConfigError("Pick at least one trader")
         share = round(budget / len(traders), 2)
-        if share < RiskLimits().min_order_value * 2:
-            raise ConfigError(f"A budget of {budget:g} is too small to split across {len(traders)} traders")
+        floor = self.min_trader_budget(account_id, symbols)
+        if share < floor:
+            raise ConfigError(f"{share:g} per trader is too little: each needs at least {floor:g} to place orders "
+                              "above the exchange minimum. Pick fewer traders or raise the budget")
         created = [self.create_bot({"strategy": k, "account_id": account_id, "symbols": symbols}) for k in ANALYSTS]
         for key in traders:
-            bot = self.create_bot({"strategy": key, "account_id": account_id, "symbols": symbols, "budget": share})
-            if mode == Mode.LIVE:
-                self._set_mode(bot, Mode.LIVE, confirmed=True)
-                self._save_bot(bot)
-            created.append(bot)
+            created.append(self.create_bot({"strategy": key, "account_id": account_id, "symbols": symbols,
+                                             "budget": share, "profile": profile}))
         return created
+
+    def min_order_value(self, account_id: str, symbol: str) -> float:
+        """The larger of our own floor and what the exchange accepts, with a little headroom."""
+        acc = self.accounts.get(account_id)
+        venue_min = acc.connector.min_order_value(symbol) if acc else 0.0
+        return max(RiskLimits().min_order_value, venue_min * 1.1)
+
+    def min_trader_budget(self, account_id: str, symbols: list[str]) -> float:
+        """A trader must afford a few minimum orders, otherwise every entry gets refused."""
+        worst = max((self.min_order_value(account_id, s) for s in symbols), default=RiskLimits().min_order_value)
+        return round(worst * 3, 2)
 
     # ------------------------------------------------------------------ accounts
 
@@ -260,6 +280,13 @@ class Engine:
         bot = BotRuntime(cfg, cls(cfg.get("params")), limits=RiskLimits.from_dict(cfg.get("limits")))
         if bot.is_trader:
             state = cfg.get("ledger")
+            if cfg.get("mode") == "paper":
+                # Saved by an older version. Its paper positions never existed on the exchange, so start clean
+                # and make the owner look before this trader places its first real order.
+                state = None
+                cfg["enabled"] = False
+                cfg.pop("mode")
+                self.last_said[bot.id] = {"ts": now_ms(), "text": PAPER_REMOVED, "topic": "bot"}
             bot.ledger = Ledger.from_state(state) if state else Ledger(float(cfg["budget"]))
         self.bots[bot.id] = bot
         return bot
@@ -284,15 +311,21 @@ class Engine:
             "symbols": symbols,
             "params": {k: float(v) for k, v in (data.get("params") or {}).items() if k in cls.defaults},
             "enabled": True,
-            "mode": Mode.PAPER.value,  # every bot starts on paper, always
             "created": now_ms(),
         }
         if cls.role == "trader":
+            self._require_tradable(account_id)
             budget = float(data.get("budget") or 0)
             if budget <= 0:
                 raise ConfigError("Give the trader a budget above zero")
+            profile = data.get("profile") or "balanced"
+            if profile not in PROFILES:
+                raise ConfigError(f"Unknown risk profile: {profile}")
+            base = PROFILES[profile]["limits"].to_dict()
             cfg["budget"] = budget
-            cfg["limits"] = RiskLimits.from_dict(data.get("limits")).to_dict()
+            cfg["profile"] = profile
+            cfg["size_mult"] = PROFILES[profile]["size"]
+            cfg["limits"] = RiskLimits.from_dict({**base, **(data.get("limits") or {})}).to_dict()
         bot = self._mount_bot(cfg)
         self._save_bot(bot)
         self.bus.publish("bot", {"event": "created", "bot": bot.id, "name": cfg["name"]})
@@ -315,8 +348,12 @@ class Engine:
             bot.config["enabled"] = bool(data["enabled"])
             if data["enabled"]:
                 bot.paused_reason = bot.paused_kind = None
-        if "mode" in data and bot.is_trader:
-            self._set_mode(bot, Mode(data["mode"]), bool(data.get("confirm")))
+        if "profile" in data and bot.is_trader:
+            profile = str(data["profile"])
+            if profile not in PROFILES:
+                raise ConfigError(f"Unknown risk profile: {profile}")
+            bot.limits = PROFILES[profile]["limits"]
+            bot.config.update(profile=profile, size_mult=PROFILES[profile]["size"], limits=bot.limits.to_dict())
         if "limits" in data and bot.is_trader:
             bot.limits = RiskLimits.from_dict({**bot.limits.to_dict(), **data["limits"]})
             bot.config["limits"] = bot.limits.to_dict()
@@ -326,25 +363,13 @@ class Engine:
         self.bus.publish("bot", {"event": "updated", "bot": bot.id, "name": bot.config["name"]})
         return bot
 
-    def _set_mode(self, bot: BotRuntime, mode: Mode, confirmed: bool) -> None:
-        if mode == bot.mode:
-            return
-        assert bot.ledger is not None
-        if any(p.is_open for p in bot.ledger.positions.values()):
-            raise ConfigError("Close this bot's positions before switching mode")
-        if mode == Mode.LIVE:
-            acc = self.accounts[bot.config["account_id"]]
-            st = acc.status
-            if acc.record["venue"] == "sim":
-                raise ConfigError("The simulator has no real money. Connect an exchange account first")
-            if not st or not st.ok or not st.can_trade:
-                raise ConfigError("The account key is not verified for trading")
-            if st.can_withdraw:
-                raise ConfigError("The account key can withdraw funds. Use a trade-only key")
-            if not confirmed:
-                raise ConfigError("Confirm that this bot will trade real money")
-        bot.config["mode"] = mode.value
-        bot.ledger = Ledger(bot.ledger.budget)  # fresh books: paper results never mix with live
+    def _require_tradable(self, account_id: str) -> None:
+        """Traders place real orders, so their account must be verified, able to trade and unable to withdraw."""
+        st = self.accounts[account_id].status
+        if not st or not st.ok or not st.can_trade:
+            raise ConfigError("This account's key isn't verified for trading. Check the connection on the Accounts page")
+        if st.can_withdraw:
+            raise ConfigError("This account's key can withdraw funds. Create a trade-only key")
 
     def _set_budget(self, bot: BotRuntime, budget: float) -> None:
         assert bot.ledger is not None
@@ -359,8 +384,8 @@ class Engine:
 
     def delete_bot(self, bot_id: str) -> None:
         bot = self.bots[bot_id]
-        if bot.ledger and bot.mode == Mode.LIVE and any(p.is_open for p in bot.ledger.positions.values()):
-            raise ConfigError("This live bot still holds positions. Close them first")
+        if bot.ledger and any(p.is_open for p in bot.ledger.positions.values()):
+            raise ConfigError("This trader still holds positions on the exchange. Close them first")
         del self.bots[bot_id]
         self.store.delete_bot(bot_id)
         self.bus.publish("bot", {"event": "deleted", "bot": bot_id})
@@ -436,7 +461,7 @@ class Engine:
         fresh: dict[str, Series] = {}
         for symbol in self._watched(acc):
             key = f"{acc.id}:{symbol}"
-            candles = await acc.connector.candles(symbol, 220)
+            candles = await acc.connector.candles(symbol, HISTORY_BARS)
             if len(candles) < 3:
                 continue
             self.prices[key] = candles[-1].close
@@ -447,6 +472,7 @@ class Engine:
                 continue
             self.last_bar[key] = closed[-1].ts
             self.series[key] = fresh[key] = Series(*ta.arrays(closed))
+            self.regime[key] = regime_of(ta.efficiency_ratio(fresh[key].close, 30))
             self.bus.publish("bar", {"key": key, "close": closed[-1].close, "ts": closed[-1].ts}, keep=False)
         if not fresh:
             return
@@ -459,14 +485,14 @@ class Engine:
         analysts = [b for b in self.bots.values()
                     if not b.is_trader and b.active and b.config["account_id"] == acc.id]
         for bot in analysts:
-            watched = {k: fresh[k] for k in bot.keys if k in fresh}
+            assert isinstance(bot.strategy, Analyst)
+            watched = {k: fresh[k].tail(bot.strategy.lookback) for k in bot.keys if k in fresh}
             if not watched:
                 continue
-            assert isinstance(bot.strategy, Analyst)
             for key, reading in bot.strategy.read_all(watched).items():
-                s = watched[key]
+                s = fresh[key].tail(WINDOW_BARS)
                 atr_frac = float(ta.atr(s.high, s.low, s.close)[-1] / s.price)
-                self.council.hear(bot.id, key, reading, s.price, now, self.bar_ms[key], atr_frac)
+                self.council.hear(bot.id, key, reading, s.price, now, self.bar_ms[key], atr_frac, self.regime.get(key))
                 sig = Signal(bot.id, key, reading.kind, reading.direction, reading.confidence,
                              reading.note, s.price)
                 self.bus.publish("signal", {**sig.to_dict(), "bot_name": bot.config["name"]})
@@ -509,13 +535,14 @@ class Engine:
             s = fresh.get(key)
             if s is None or len(s) < bot.strategy.min_bars:
                 continue
+            s = s.tail(bot.strategy.lookback)
             pos = bot.ledger.position(key)
             stop = self.risk.stop_triggered(bot.ledger, bot.limits, key, s.price)
             if stop:
                 await self._execute(bot, key, Side.SELL if pos.qty > 0 else Side.BUY, abs(pos.qty), stop,
                                     force=True)
                 continue
-            council = self.council.consensus(key, now, self.bar_ms[key])
+            council = self.council.consensus(key, now, self.bar_ms[key], self.regime.get(key))
             intent = bot.strategy.decide(s, PositionView(pos.qty, pos.avg_price), council)
             if intent is None:
                 continue
@@ -523,7 +550,8 @@ class Engine:
                 if pos.is_open:
                     await self._execute(bot, key, intent.side, abs(pos.qty), intent.reason)
                 continue
-            qty = equity * min(max(intent.size, 0), 1) / self.prices[key]
+            size = min(max(intent.size, 0) * bot.size_mult * conviction(council.direction), 1)
+            qty = equity * size / self.prices[key]
             await self._execute(bot, key, intent.side, qty, intent.reason, council=council)
 
     async def _execute(self, bot: BotRuntime, key: str, side: Side, qty: float, reason: str,
@@ -534,26 +562,24 @@ class Engine:
         if not price:
             return
         equity = bot.ledger.equity(self.prices)
+        symbol = key.split(":", 1)[1]
         if force:
             verdict_qty, note = qty, None
         else:
-            verdict = self.risk.review(bot.ledger, bot.limits, acc.market, key, side, qty, price, equity)
+            limits = replace(bot.limits, min_order_value=self.min_order_value(acc.id, symbol))
+            verdict = self.risk.review(bot.ledger, limits, acc.market, key, side, qty, price, equity)
             if not verdict.approved:
                 self.bus.publish("rejected", {"bot": bot.id, "bot_name": bot.config["name"], "key": key,
                                               "side": side.value, "reason": verdict.reason, "intent": reason})
                 return
             verdict_qty, note = verdict.qty, verdict.reason
 
-        symbol = key.split(":", 1)[1]
         order_id = new_id("ord")
         try:
-            if bot.mode == Mode.LIVE:
-                res = await acc.connector.market_order(symbol, side, acc.connector.normalize_qty(symbol, verdict_qty))
-                fill_price, fill_qty, fee = res.price, res.qty, res.fee
-            else:
-                slip = PAPER_SLIPPAGE if side == Side.BUY else -PAPER_SLIPPAGE
-                fill_price, fill_qty = price * (1 + slip), verdict_qty
-                fee = fill_qty * fill_price * PAPER_FEE
+            res = await acc.connector.market_order(symbol, side, acc.connector.normalize_qty(symbol, verdict_qty))
+            fill_price, fee = res.price, res.fee
+            # A fee taken from the bought coin means we hold less of it than we bought.
+            fill_qty = res.qty - res.fee_base if side == Side.BUY else res.qty
         except Exception as exc:
             log.exception("Order failed for bot %s", bot.id)
             self.bus.publish("error", {"bot": bot.id, "bot_name": bot.config["name"], "key": key,
@@ -563,6 +589,11 @@ class Engine:
         fill = Fill(order_id, bot.id, key, side, fill_qty, fill_price, fee, bot.mode,
                     reason + (f" ({note})" if note else ""))
         fill.pnl = bot.ledger.apply(fill)
+        left = bot.ledger.position(key)
+        if side == Side.SELL and left.is_open and abs(left.qty) * fill_price < self.min_order_value(acc.id, symbol) / 2:
+            # A crumb too small to ever sell (rounding or fees). Stop tracking it so exits don't retry forever.
+            log.info("Writing off %s %s dust for bot %s", left.qty, symbol, bot.id)
+            bot.ledger.positions.pop(key, None)
         bot.last_action = fill.reason
         payload = fill.to_dict()
         payload["bot_name"] = bot.config["name"]
@@ -597,11 +628,12 @@ class Engine:
         }
         if bot.ledger:
             snap = bot.ledger.snapshot(self.prices)
-            view.update(mode=bot.mode.value, limits=bot.limits.to_dict(), **snap,
+            view.update(limits=bot.limits.to_dict(), profile=bot.config.get("profile", "balanced"), **snap,
                         pnl=snap["equity"] - snap["budget"],
                         pnl_pct=(snap["equity"] / snap["budget"] - 1) if snap["budget"] else 0)
         else:
             view["reputation"] = self.council.rep(bot.id).to_dict()
+            view["trust"] = self.council.profile(bot.id)
         return view
 
     def overview(self) -> dict:
@@ -610,9 +642,9 @@ class Engine:
         markets = {}
         now = now_ms()
         for key, price in self.prices.items():
-            c = self.council.consensus(key, now, self.bar_ms.get(key, 60_000))
+            c = self.council.consensus(key, now, self.bar_ms.get(key, 60_000), self.regime.get(key))
             markets[key] = {"price": price, "direction": c.direction, "risk_off": c.risk_off,
-                            "voices": len(c.voices)}
+                            "voices": len(c.voices), "regime": self.regime.get(key)}
         return {
             "halted": self.risk.halted,
             "running": self.running,
@@ -622,7 +654,9 @@ class Engine:
             "totals": {
                 "budget": sum(t["budget"] for t in traders),
                 "equity": sum(t["equity"] for t in traders),
-                "live": sum(1 for t in traders if t["mode"] == "live"),
+                "traders": len(traders),
+                "testnet": any(a.record.get("sandbox") for a in self.accounts.values()
+                               if any(b.config["account_id"] == a.id for b in self.bots.values())),
                 "running": sum(1 for b in bots if b["enabled"] and not b["paused_reason"]),
             },
         }

@@ -19,19 +19,43 @@ class TrendAnalyst(Analyst):
     key = "trend"
     title = "Trend"
     persona = "Vector"
-    summary = "Fast vs slow EMA, scaled by volatility. Says which way the market leans and how hard."
-    defaults = {"fast": 20, "slow": 50}
+    summary = ("Reads the trend on two charts at once: the one you trade and one twelve times longer. "
+               "Speaks up when both agree and warns when they don't.")
+    defaults = {"fast": 20, "slow": 50, "zoom": 12}
+    lookback = 720  # enough history to rebuild a 12x longer chart
 
     def read(self, s: Series) -> Reading:
-        fast = ta.ema(s.close, int(self.p["fast"]))
-        slow = ta.ema(s.close, int(self.p["slow"]))
-        vol = ta.atr(s.high, s.low, s.close)[-1] or 1e-9
+        short = s.tail(220)
+        fast = ta.ema(short.close, int(self.p["fast"]))
+        slow = ta.ema(short.close, int(self.p["slow"]))
+        vol = ta.atr(short.high, short.low, short.close)[-1] or 1e-9
         spread = (fast[-1] - slow[-1]) / vol
         slope = (slow[-1] - slow[-6]) / vol
-        direction = _clip(np.tanh(spread / 2) * 0.7 + np.tanh(slope) * 0.3)
-        word = "up" if direction > 0.15 else "down" if direction < -0.15 else "sideways"
-        return Reading("trend", direction, _clip(abs(direction), 0, 1),
-                       f"Trend {word}: fast EMA {spread:+.1f} ATR from slow")
+        local = _clip(np.tanh(spread / 2) * 0.7 + np.tanh(slope) * 0.3)
+        word = lambda d: "up" if d > 0.15 else "down" if d < -0.15 else "sideways"  # noqa: E731
+
+        big = self._higher_timeframe(s.close)
+        if big is None:  # not enough history yet: judge on the short chart alone
+            return Reading("trend", local, _clip(abs(local), 0, 1),
+                           f"Trend {word(local)}: fast EMA {spread:+.1f} ATR from slow")
+        zoom = int(self.p["zoom"])
+        if local * big > 0:
+            direction = _clip(local * 0.6 + big * 0.4)
+            return Reading("trend", direction, _clip(abs(direction) + 0.15, 0, 1),
+                           f"Trend {word(direction)} on both the short chart and the {zoom}x chart")
+        direction = _clip(local * 0.5 + big * 0.5)
+        return Reading("trend", direction, _clip(abs(direction) * 0.7, 0, 1),
+                       f"Short chart {word(local)}, {zoom}x chart {word(big)}: trading against the bigger trend")
+
+    def _higher_timeframe(self, close: np.ndarray) -> float | None:
+        """Trend direction on a chart `zoom` times longer, rebuilt by sampling every zoom-th close."""
+        zoom = int(self.p["zoom"])
+        sampled = close[::-1][::zoom][::-1]
+        if len(sampled) < 40:
+            return None
+        fast, slow = ta.ema(sampled, 9)[-1], ta.ema(sampled, 26)[-1]
+        swing = np.std(np.diff(np.log(sampled))) * sampled[-1] or 1e-9
+        return _clip(float(np.tanh((fast - slow) / (swing * 2))))
 
 
 class MomentumAnalyst(Analyst):

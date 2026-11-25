@@ -20,8 +20,8 @@ class Side(str, Enum):
 
 
 class Mode(str, Enum):
-    PAPER = "paper"
-    LIVE = "live"
+    LIVE = "live"          # every bot: real orders (on a testnet if the account is one)
+    BACKTEST = "backtest"  # replayed history only
 
 
 def now_ms() -> int:

@@ -147,7 +147,6 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 .av .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
 .av .dots i.ok { background: var(--ok); }
 .av .dots i.live { background: var(--down); }
-.av .dots i.paper { background: #9b8cf2; }
 .av .dots i.stop { background: var(--down); }
 .av .badge { position: absolute; right: -3px; bottom: -3px; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 10px; background: #8b6cf0; color: #fff; font-size: 11px; font-weight: 700; line-height: 19px; text-align: center; border: 2px solid var(--side); animation: pop .35s var(--spring); }
 @keyframes pop { from { transform: scale(0); } }
@@ -323,6 +322,9 @@ label.option:has(input:checked) { border-color: var(--accent); background: rgb(2
 .calls i { width: 10px; height: 10px; border-radius: 3px; background: var(--down); }
 .calls i.r { background: var(--ok); }
 .chart { width: 100%; height: 160px; display: block; }
+.item.trust { align-items: center; }
+.meter { height: 5px; border-radius: 3px; background: var(--raised); margin-top: 6px; overflow: hidden; max-width: 320px; }
+.meter span { display: block; height: 100%; border-radius: 3px; transition: width .6s var(--ease); }
 
 /* ---------------------------------------------------------------- pages */
 .page { max-width: 860px; margin: 0 auto; padding: 28px; }

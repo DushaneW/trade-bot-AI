@@ -29,6 +29,24 @@ class RiskLimits:
         return cls(**{k: float(v) for k, v in (data or {}).items() if k in known})
 
 
+PROFILES: dict[str, dict] = {
+    "careful": {"label": "Careful", "size": 0.7,
+                "hint": "Small positions, 3% stop loss, pauses after a 20% drawdown.",
+                "limits": RiskLimits(max_position_pct=0.35, stop_loss_pct=0.03, max_drawdown_pct=0.2, daily_loss_pct=0.06)},
+    "balanced": {"label": "Balanced", "size": 1.0,
+                 "hint": "The defaults: 4% stop loss, half the budget per market at most.",
+                 "limits": RiskLimits()},
+    "bold": {"label": "Bold", "size": 1.3,
+             "hint": "Bigger positions, 6% stop loss, pauses after a 40% drawdown.",
+             "limits": RiskLimits(max_position_pct=0.8, stop_loss_pct=0.06, max_drawdown_pct=0.4, daily_loss_pct=0.15)},
+}
+
+
+def conviction(direction: float) -> float:
+    """Scale an entry by how strongly the council agrees: 0.75x when split, up to 1.25x when unanimous."""
+    return 0.75 + 0.5 * min(abs(direction), 1.0)
+
+
 @dataclass
 class Verdict:
     qty: float
@@ -96,5 +114,11 @@ class RiskManager:
             qty = max(ledger.cash / 1.002, 0) / price
             reason = "Reduced to available budget"
         if qty * price < limits.min_order_value:
-            return Verdict(0, reason or "Below minimum order value")
+            # Small budgets: a smaller-than-minimum idea becomes a minimum-size order, as long as the trader
+            # can afford it and it still fits the position limit. Otherwise skip it.
+            minimum = limits.min_order_value * 1.02
+            affordable = side == Side.SELL or minimum * 1.002 <= ledger.cash
+            if qty > 0 and affordable and minimum <= max(room, 0):
+                return Verdict(minimum / price, "Raised to the exchange minimum")
+            return Verdict(0, reason or "Below the exchange minimum and the budget can't cover it")
         return Verdict(qty, reason)

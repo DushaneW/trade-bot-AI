@@ -46,14 +46,14 @@ SYSTEM_PROMPT = """You are the Chair, lead of Quorum: a council of trading bots 
 Analysts read markets and vote; traders hold small budgets and trade; you report to the owner.
 
 You receive a JSON snapshot of the council: markets with the reputation-weighted vote (-1 bearish to +1 bullish)
-and risk warnings, fresh analyst readings, every trader's budget, equity, return, win rate and mode
-(paper or live), and each analyst's measured accuracy.
+and risk warnings, fresh analyst readings, every trader's budget, equity, return, win rate and risk profile (all traders place real orders, on a testnet
+when the account is one), and each analyst's measured accuracy, overall and per market.
 
 How to answer:
 - Use only facts present in the snapshot. Quote the numbers. If the snapshot cannot answer the question, say so.
 - Lead with the answer. Then at most three numbered points, each starting with a bold verb, e.g. "1. **Watch** BTC/USDT: ...".
 - Weigh analysts by their accuracy; say when they disagree.
-- Never promise or predict profit. Paper results are not live results. Mention risk when it is material.
+- Never promise or predict profit. Testnet results are not real-money results. Mention risk when it is material.
 - You cannot trade or change settings. If an action makes sense, recommend it in words; the owner decides.
 - Plain text only, apart from **bold** verbs. Keep it under 180 words."""
 
@@ -301,7 +301,9 @@ class Lead:
                     continue
                 readings[key].append({"analyst": bot.config["name"], "kind": r.kind, "direction": round(r.direction, 3),
                                       "confidence": round(r.confidence, 3), "note": r.note,
-                                      "accuracy": round(self.engine.council.rep(bot.id).accuracy, 3)})
+                                      # how often this analyst has been right on this market, not overall
+                                      "accuracy": round(self.engine.council.rep(bot.id, f"m:{key}").shrunk(
+                                          self.engine.council.rep(bot.id).accuracy), 3)})
                 notes.append(r.note)
             task["steps"][i].update(status="done", ms=round(elapsed, 2), note=notes[0] if notes else "No view")
             self._post(task)
@@ -376,14 +378,16 @@ class Lead:
             "markets": {k.split(":", 1)[1]: {**{kk: round(v, 4) if isinstance(v, float) else v
                                                for kk, v in ov["markets"].get(k, {}).items()},
                                             "readings": readings.get(k, [])} for k in scope},
-            "traders": [{"name": b["name"], "strategy": b["title"], "mode": b["mode"], "budget": b["budget"],
+            "traders": [{"name": b["name"], "strategy": b["title"], "profile": b["profile"], "budget": b["budget"],
                          "equity": round(b["equity"], 2), "return_pct": round(b["pnl_pct"] * 100, 2),
                          "closed_trades": b["trades"], "win_rate": b["win_rate"], "paused": b["paused_reason"],
                          "open_positions": {k.split(":", 1)[1]: round(p["qty"], 6) for k, p in b["positions"].items()},
                          "markets": b["symbols"]}
                         for b in ov["bots"] if b["role"] == "trader"],
             "analysts": [{"name": b["name"], "accuracy": round(b["reputation"]["accuracy"], 3),
-                          "weight": round(b["reputation"]["weight"], 2), "scored_calls": b["reputation"]["calls"]}
+                          "weight": round(b["reputation"]["weight"], 2), "scored_calls": b["reputation"]["calls"],
+                          "by_market": {m["name"].split(":", 1)[-1]: round(m["accuracy"], 3) for m in b["trust"]["markets"]},
+                          "by_regime": {r["name"]: round(r["accuracy"], 3) for r in b["trust"]["regimes"]}}
                          for b in ov["bots"] if b["role"] == "analyst"],
             "kill_switch": ov["halted"],
         }
@@ -422,7 +426,7 @@ class Lead:
         total_equity = sum(b["equity"] for b in traders)
         items = []
         for b in traders:
-            state = "paused" if b["paused_reason"] else "off" if not b["enabled"] else b["mode"]
+            state = "paused" if b["paused_reason"] else "off" if not b["enabled"] else b["profile"]
             win = "no closed trades yet" if b["win_rate"] is None else f"{b['win_rate']:.0%} of {b['trades']} won"
             open_n = len(b["positions"])
             items.append({"verb": "Up" if b["pnl"] > 0 else "Down" if b["pnl"] < 0 else "Flat", "target": b["id"],
@@ -473,7 +477,7 @@ class Lead:
             new_budget = round(b["budget"] * 1.25, 2)
             items.append({"verb": "Consider", "target": b["id"],
                           "text": f"{b['name']} leads at {b['pnl_pct']:+.1%} with {b['win_rate']:.0%} wins over "
-                                  f"{b['trades']} trades ({b['mode']}). Past results do not guarantee the next ones.",
+                                  f"{b['trades']} trades. Past results do not guarantee the next ones.",
                           "proposals": [{"id": new_id("prop"), "label": f"Raise budget to {new_budget:g}",
                                          "action": {"type": "budget", "bot_id": b["id"], "value": new_budget}}]})
 

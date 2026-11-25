@@ -1,7 +1,8 @@
 """First-run setup, run by the Chair as a conversation.
 
-market -> venue -> connect (API keys) -> markets -> budget & mode -> ready -> live
+market -> venue -> connect (API keys) -> markets -> budget -> team -> risk -> ready -> live
 
+Every trader places real orders. To practise, connect a testnet account.
 Nothing analyses or trades until the owner presses Start at the end. Keys
 are submitted through a form card straight to the account store; they
 never appear in the chat history.
@@ -10,18 +11,27 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .bots import TRADERS
 from .connectors import NEEDS_PASSPHRASE, SUGGESTED_MARKETS, VENUE_NAMES, VENUES
 from .engine import ConfigError
-from .models import Market, Mode
-from .risk import RiskLimits
+from .risk import PROFILES
 
 if TYPE_CHECKING:
     from .engine import Engine
     from .lead import Lead
     from .storage import Store
 
-STEPS = ("market", "venue", "connect", "markets", "budget", "ready", "done")
-MIN_BUDGET = RiskLimits().min_order_value * 2 * 5  # every one of the 5 traders must afford two minimum orders
+STEPS = ("market", "venue", "connect", "markets", "budget", "team", "risk", "ready", "done")
+
+# Who to hire first when the budget only stretches to a few traders: the steadiest styles lead.
+HIRING_ORDER = ["council", "trend_rider", "breakout", "mean_reverter", "accumulator"]
+TRADER_HINTS = {
+    "council": "Only trades when the analysts strongly agree. A calm first hire.",
+    "trend_rider": "Follows trends when the team agrees on direction.",
+    "breakout": "Buys new highs, gets out fast when they fail.",
+    "mean_reverter": "Buys sharp drops and sells the bounce.",
+    "accumulator": "Buys a little at a time and takes profit at a set gain.",
+}
 
 MARKET_OPTIONS = [
     {"value": "crypto", "label": "Crypto", "hint": "Spot markets on a crypto exchange, open 24/7"},
@@ -107,18 +117,29 @@ class Onboarding:
         elif step == "budget":
             acc = self.engine.accounts[s["account_id"]]
             balance = acc.status.balance_quote if acc.status else None
-            default = min(500.0, round(balance, 2)) if balance else 500.0
-            self.lead.prompt("budget", "How much should the traders work with, and with what money?",
-                             {"type": "form", "submit": "Assemble the team", "fields": [
-                                 {"name": "budget", "label": "Total budget", "kind": "number", "value": default,
-                                  "hint": (f"Free balance on the account: {balance:,.2f}. " if balance else "")
-                                          + f"Split evenly across 5 traders. Minimum {MIN_BUDGET:g}."},
-                                 {"name": "mode", "label": "Money", "kind": "choice", "value": "paper", "options": [
-                                     {"value": "paper", "label": "Paper", "hint": "Real prices, simulated orders. Recommended first."},
-                                     {"value": "live", "label": "Real money", "hint": "Real orders on your account."}]},
-                                 {"name": "confirm", "label": "I understand the bots can lose this money.", "kind": "check",
-                                  "show_if": {"mode": "live"}},
+            default = round(min(100.0, balance), 2) if balance else 100.0
+            where = "testnet funds" if acc.record.get("sandbox") else "real money from your account"
+            self.lead.prompt("budget", f"How much should the team work with? The traders place real orders with {where}.",
+                             {"type": "form", "submit": "Continue", "fields": [
+                                 {"name": "budget", "label": "Budget for the team", "kind": "number", "value": default,
+                                  "hint": (f"Free on the account: {balance:,.2f}. " if balance is not None else "")
+                                          + f"At least {self._floor():g}. Whatever you don't give the team stays untouched."},
+                                 {"name": "confirm", "label": "I understand the traders can lose this money.", "kind": "check"},
                              ]})
+        elif step == "team":
+            budget, floor = s["budget"], self._floor()
+            fits = max(1, min(len(HIRING_ORDER), int(budget // (floor * 1.6))))
+            options = [{"value": k, "label": f"{TRADERS[k].persona} · {TRADERS[k].title}", "hint": TRADER_HINTS[k]}
+                       for k in HIRING_ORDER]
+            advice = ("All five fit comfortably." if fits == len(HIRING_ORDER) else
+                      f"With {budget:,.2f}, {fits} trader{'s' if fits > 1 else ''} keep{'s' if fits == 1 else ''} every order "
+                      "comfortably above the exchange minimum, so I picked those.")
+            self.lead.prompt("team", f"Who should trade for you? The budget is split evenly between them. {advice}",
+                             {"type": "multi", "options": options, "selected": HIRING_ORDER[:fits], "submit": "Hire them"})
+        elif step == "risk":
+            options = [{"value": k, "label": p["label"], "hint": p["hint"]} for k, p in PROFILES.items()]
+            self.lead.prompt("risk", "How careful should they be? You can change this per trader later.",
+                             {"type": "choice", "options": options})
         elif step == "ready":
             self.lead.prompt("ready", "Everything is in place. The council stays idle until you start it.",
                              {"type": "choice", "options": [{"value": "start", "label": "Start the council", "primary": True}]})
@@ -138,7 +159,7 @@ class Onboarding:
         if market == "stocks":
             return [{"name": "api_key", "label": "API key ID", "kind": "text"},
                     {"name": "secret", "label": "Secret key", "kind": "secret"},
-                    {"name": "sandbox", "label": "This is a paper-trading key", "kind": "check", "value": True}]
+                    {"name": "sandbox", "label": "This key is for an Alpaca practice (paper) account", "kind": "check", "value": True}]
         return [{"name": "api_key", "label": "API token", "kind": "secret"},
                 {"name": "account_id", "label": "Account ID", "kind": "text", "placeholder": "101-004-1234567-001"},
                 {"name": "sandbox", "label": "This is a practice account", "kind": "check", "value": True}]
@@ -221,30 +242,54 @@ class Onboarding:
         self._save(symbols=picks, step="budget")
         self._ask("budget")
 
+    def _floor(self) -> float:
+        s = self.state
+        return self.engine.min_trader_budget(s["account_id"], s.get("symbols") or [])
+
     async def _on_budget(self, value: dict) -> None:
         s = self.state
         try:
             budget = round(float(value.get("budget")), 2)
         except (TypeError, ValueError):
             raise ConfigError("Enter the budget as a number") from None
-        if budget < MIN_BUDGET:
-            raise ConfigError(f"The budget must be at least {MIN_BUDGET:g}")
-        mode = Mode(value.get("mode", "paper"))
+        if budget < self._floor():
+            raise ConfigError(f"The budget must be at least {self._floor():g} so orders clear the exchange minimum")
         acc = self.engine.accounts[s["account_id"]]
-        if mode == Mode.LIVE:
-            if not value.get("confirm"):
-                raise ConfigError("Tick the confirmation to trade real money")
-            if acc.status and acc.status.balance_quote is not None and budget > acc.status.balance_quote:
-                raise ConfigError(f"The account only has {acc.status.balance_quote:,.2f} free")
-        self.engine.create_team(s["account_id"], s["symbols"], budget, mode)
-        label = "real money" if mode == Mode.LIVE else "paper"
-        self.lead.owner_says(f"{budget:,.2f} on {label}")
-        share = budget / 5
+        if acc.status and acc.status.balance_quote is not None and budget > acc.status.balance_quote:
+            raise ConfigError(f"The account only has {acc.status.balance_quote:,.2f} free")
+        if not value.get("confirm"):
+            raise ConfigError("Tick the box to confirm the traders can lose this money")
+        self.lead.owner_says(f"{budget:,.2f} for the team")
+        self._save(budget=budget, step="team")
+        self._ask("team")
+
+    async def _on_team(self, value: dict) -> None:
+        s = self.state
+        picks = [k for k in HIRING_ORDER if k in (value.get("choices") or [])]
+        if not picks:
+            raise ConfigError("Hire at least one trader")
+        share = s["budget"] / len(picks)
+        if share < self._floor():
+            raise ConfigError(f"That leaves {share:,.2f} each, below the {self._floor():g} a trader needs. Hire fewer")
+        self.lead.owner_says(", ".join(TRADERS[k].persona for k in picks))
+        self._save(traders=picks, step="risk")
+        self._ask("risk")
+
+    async def _on_risk(self, value: dict) -> None:
+        s = self.state
+        profile = value.get("choice")
+        if profile not in PROFILES:
+            raise ConfigError("Pick how careful the traders should be")
+        self.engine.create_team(s["account_id"], s["symbols"], s["budget"], s["traders"], profile)
+        self.lead.owner_says(PROFILES[profile]["label"])
+        share = s["budget"] / len(s["traders"])
+        names = ", ".join(TRADERS[k].persona for k in s["traders"])
         self.lead.say(
-            f"The council is assembled: 9 analysts watching {', '.join(s['symbols'])}, and 5 traders with "
-            f"{share:,.2f} each on {label}. Every trader has a stop loss, a daily loss limit and a drawdown limit; "
-            "you can change them on each trader's page.")
-        self._save(budget=budget, mode=mode.value, step="ready")
+            f"The team is assembled. 9 analysts will watch {', '.join(s['symbols'])}, and {names} "
+            f"{'trades' if len(s['traders']) == 1 else 'trade'} with {share:,.2f} each on the "
+            f"{PROFILES[profile]['label'].lower()} profile. Every trader has a stop loss, a daily loss limit and a "
+            "drawdown limit, and you can change them on its page.")
+        self._save(profile=profile, step="ready")
         self._ask("ready")
 
     async def _on_ready(self, value: dict) -> None:
@@ -255,5 +300,6 @@ class Onboarding:
         self._save(step="done")
         s = self.state
         self.lead.say(
-            f"The council is live. Analysts read {', '.join(s['symbols'])} on every new candle, traders act on their own "
-            "budgets, and I'll brief you when something changes. Ask me anything, or say stop at any time.")
+            f"The council is live. Analysts read {', '.join(s['symbols'])} on every new candle, traders place real "
+            "orders within their budgets, and I'll brief you when something changes. Ask me anything, or say stop "
+            "at any time.")

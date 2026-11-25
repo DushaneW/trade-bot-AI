@@ -29,6 +29,12 @@ class Series:
     def __len__(self) -> int:
         return len(self.close)
 
+    def tail(self, n: int) -> "Series":
+        """The last n bars (views, not copies)."""
+        if n >= len(self.close):
+            return self
+        return Series(self.high[-n:], self.low[-n:], self.close[-n:], self.volume[-n:])
+
 
 @dataclass
 class Reading:
@@ -76,6 +82,7 @@ class Strategy(ABC):
     summary: ClassVar[str]
     defaults: ClassVar[dict[str, float]] = {}
     min_bars: ClassVar[int] = 60
+    lookback: ClassVar[int] = 220  # bars the strategy is shown; multi-timeframe analysts ask for more
 
     def __init__(self, params: dict[str, float] | None = None) -> None:
         self.p = {**self.defaults, **(params or {})}

@@ -5,7 +5,7 @@ strategy, risk manager, ledger), so a backtest tests the code that will
 actually trade. Rules that keep it honest:
 
   * no look-ahead: decisions use bar i's close, orders fill at bar i+1's open;
-  * every fill pays the paper fee and slippage;
+  * every fill pays a taker fee and slippage;
   * stop losses are checked on each bar's low/high, not just the close;
   * analysts warm up before the trader is allowed to act.
 
@@ -25,16 +25,16 @@ import numpy as np
 
 from . import indicators as ta
 from .bots import ANALYSTS, TRADERS, PositionView, Series
-from .learning import Council
+from .learning import Council, regime_of
 from .ledger import Ledger
 from .models import Candle, Fill, Market, Mode, Side, new_id
-from .risk import RiskLimits, RiskManager
+from .risk import PROFILES, RiskLimits, RiskManager, conviction
 
 log = logging.getLogger(__name__)
 
 FEE = 0.001
 SLIPPAGE = 0.0005
-WINDOW = 220  # bars each strategy sees, same as live
+WINDOW = 760  # history kept per bar, same as live; each strategy sees its own lookback of it
 WARMUP = 80
 MIN_SHARPE_DAYS = 30
 MAX_BARS = 5000
@@ -50,6 +50,7 @@ class BacktestSpec:
     budget: float = 100.0
     params: dict[str, float] = field(default_factory=dict)
     limits: dict[str, float] = field(default_factory=dict)
+    profile: str = "balanced"
     analysts: list[str] = field(default_factory=lambda: list(ANALYSTS))
 
 
@@ -72,7 +73,9 @@ def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress:
     started = time.perf_counter()
     trader = TRADERS[spec.strategy](spec.params)
     analysts = {k: ANALYSTS[k]() for k in spec.analysts if k in ANALYSTS}
-    limits = RiskLimits.from_dict(spec.limits)
+    profile = PROFILES.get(spec.profile, PROFILES["balanced"])
+    limits = RiskLimits.from_dict({**profile["limits"].to_dict(), **spec.limits})
+    size_mult = profile["size"]
     risk = RiskManager()
     council = Council()
     ledger = Ledger(spec.budget)
@@ -93,7 +96,7 @@ def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress:
     def fill(key: str, side: Side, qty: float, price: float, reason: str, t: int) -> None:
         slip = SLIPPAGE if side == Side.BUY else -SLIPPAGE
         px = price * (1 + slip)
-        f = Fill(new_id("bt"), "backtest", key, side, qty, px, qty * px * FEE, Mode.PAPER, reason, ts=t)
+        f = Fill(new_id("bt"), "backtest", key, side, qty, px, qty * px * FEE, Mode.BACKTEST, reason, ts=t)
         f.pnl = ledger.apply(f)
         trades.append({"ts": t, "symbol": key, "side": side.value, "qty": qty, "price": px,
                        "fee": f.fee, "pnl": f.pnl, "reason": reason})
@@ -149,32 +152,35 @@ def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress:
                         pending.append((key, Side.SELL if pos.qty > 0 else Side.BUY, abs(pos.qty), f"exit:{paused}"))
 
         # 4. Analysts read the closed bar, the council learns, the trader decides.
-        series = {}
+        series, regime = {}, {}
         for k in keys:
             lo = max(0, i + 1 - WINDOW)
             _, high, low, close, volume = (a[lo:i + 1] for a in arrays[k])
             series[k] = Series(high, low, close, volume)
+            regime[k] = regime_of(ta.efficiency_ratio(close, 30))
         council.score(closes, t)
         for aid, analyst in analysts.items():
-            for key, reading in analyst.read_all(series).items():
-                s = series[key]
+            seen = {k: s.tail(analyst.lookback) for k, s in series.items()}
+            for key, reading in analyst.read_all(seen).items():
+                s = series[key].tail(220)
                 atr_frac = float(ta.atr(s.high, s.low, s.close)[-1] / s.price)
-                council.hear(aid, key, reading, s.price, t, bar_ms, atr_frac)
+                council.hear(aid, key, reading, s.price, t, bar_ms, atr_frac, regime[key])
 
         if paused or i == n - 1:
             continue
         for key in keys:
-            s = series[key]
+            s = series[key].tail(trader.lookback)
             pos = ledger.position(key)
-            intent = trader.decide(s, PositionView(pos.qty, pos.avg_price), council.consensus(key, t, bar_ms))
+            vote = council.consensus(key, t, bar_ms, regime[key])
+            intent = trader.decide(s, PositionView(pos.qty, pos.avg_price), vote)
             if intent is None:
                 continue
             if intent.exit:
                 if pos.is_open:
                     pending.append((key, intent.side, abs(pos.qty), f"exit:{intent.reason}"))
             else:
-                qty = equity * min(max(intent.size, 0), 1) / closes[key]
-                pending.append((key, intent.side, qty, intent.reason))
+                size = min(max(intent.size, 0) * size_mult * conviction(vote.direction), 1)
+                pending.append((key, intent.side, equity * size / closes[key], intent.reason))
 
         if progress and (i - WARMUP) % 50 == 0:
             progress((i - WARMUP) / (n - WARMUP))
@@ -229,10 +235,12 @@ class BacktestRunner:
             raise ConfigError("Budget must be above zero")
         spec = BacktestSpec(strategy, symbols, acc.market, budget,
                             {k: float(v) for k, v in (data.get("params") or {}).items()},
-                            {k: float(v) for k, v in (data.get("limits") or {}).items()})
+                            {k: float(v) for k, v in (data.get("limits") or {}).items()},
+                            profile=data.get("profile") if data.get("profile") in PROFILES else "balanced")
         run = {"id": new_id("bt"), "status": "queued", "progress": 0.0, "created": int(time.time() * 1000),
                "strategy": strategy, "title": TRADERS[strategy].title, "persona": TRADERS[strategy].persona,
                "account": acc.record["name"], "symbols": symbols, "bars": bars, "budget": budget,
+               "profile": spec.profile,
                "bot_id": data.get("bot_id")}
         self.runs[run["id"]] = run
         for old in sorted(self.runs.values(), key=lambda r: r["created"])[:-self.keep]:

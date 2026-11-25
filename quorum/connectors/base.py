@@ -24,7 +24,8 @@ class KeyCheck:
 class ExecResult:
     price: float
     qty: float
-    fee: float
+    fee: float              # total fee in the quote currency
+    fee_base: float = 0.0   # part of the fee taken from the bought asset itself (you receive less of it)
 
 
 class Connector(ABC):
@@ -50,6 +51,10 @@ class Connector(ABC):
 
     def normalize_qty(self, symbol: str, qty: float) -> float:
         return qty
+
+    def min_order_value(self, symbol: str) -> float:
+        """Smallest order the venue accepts, in the quote currency. 0 when the venue doesn't say."""
+        return 0.0
 
     async def close(self) -> None:
         return None
