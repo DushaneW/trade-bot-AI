@@ -235,7 +235,122 @@ class RelativeStrengthAnalyst(Analyst):
         return out
 
 
+class FundingAnalyst(Analyst):
+    key = "funding"
+    title = "Funding"
+    persona = "Carry"
+    summary = ("Reads the perpetual futures funding rate. When longs pay a lot to stay in, the trade is crowded "
+               "and tends to unwind; deeply negative funding means the shorts are crowded instead.")
+    defaults = {"normal": 0.0001, "crowded": 0.0005}
+    markets = ("crypto",)
+    needs_extras = True
+
+    def read(self, s: Series) -> Reading | None:
+        rate = s.extra.get("funding_rate")
+        if rate is None:
+            return None
+        normal, crowded = self.p["normal"], self.p["crowded"]
+        excess = (rate - normal) / (crowded - normal)
+        per8h = f"{rate * 100:+.3f}% per 8h"
+        if excess > 1:
+            return Reading("positioning", -_clip(0.3 + (excess - 1) * 0.2, 0, 0.8), _clip(0.4 + excess * 0.1, 0, 0.8),
+                           f"Funding {per8h}: longs are crowded and paying for it")
+        if rate < -normal * 2:
+            depth = _clip(-rate / crowded, 0, 1)
+            return Reading("positioning", 0.3 + depth * 0.4, 0.4 + depth * 0.3,
+                           f"Funding {per8h}: shorts are crowded, a squeeze is possible")
+        return Reading("positioning", 0.0, 0.15, f"Funding {per8h}, nothing unusual")
+
+
+class OpenInterestAnalyst(Analyst):
+    key = "open_interest"
+    title = "Open Interest"
+    persona = "Crowd"
+    summary = ("Compares the change in futures open interest with the price move. New money behind a move "
+               "confirms it; a move while positions close is short covering or liquidation and tends to fade.")
+    defaults = {"min_change": 0.01}
+    markets = ("crypto",)
+    needs_extras = True
+
+    def read(self, s: Series) -> Reading | None:
+        oi = s.extra.get("oi_change")
+        minutes = s.extra.get("oi_minutes") or 60.0
+        if oi is None:
+            return None
+        bars = int(max(2, min(len(s) - 1, minutes)))  # live bars are one minute
+        move = s.close[-1] / s.close[-bars - 1] - 1
+        span = f"over {minutes:.0f} min"
+        if abs(oi) < self.p["min_change"] or abs(move) < 0.001:
+            return Reading("positioning", 0.0, 0.15, f"Open interest {oi:+.1%} {span}, no clear story")
+        up = 1.0 if move > 0 else -1.0
+        if oi > 0:  # fresh positions in the direction of the move
+            return Reading("positioning", up * _clip(0.3 + oi * 10, 0, 0.8), _clip(0.35 + oi * 5, 0, 0.75),
+                           f"Price {move:+.2%} with open interest {oi:+.1%} {span}: new money behind the move")
+        return Reading("positioning", -up * 0.35, 0.4,
+                       f"Price {move:+.2%} while open interest fell {oi:.1%} {span}: positions closing, move may fade")
+
+
+class OrderBookAnalyst(Analyst):
+    key = "order_book"
+    title = "Order Book"
+    persona = "Depth"
+    summary = ("Weighs resting buy orders against sell orders near the price. A heavy bid side leans up, a heavy "
+               "ask side leans down. Books can be spoofed, so it speaks softly and the council learns how far to trust it.")
+    defaults = {"threshold": 0.2}
+    markets = ("crypto",)
+    needs_extras = True
+
+    def read(self, s: Series) -> Reading | None:
+        imb = s.extra.get("book_imbalance")
+        if imb is None:
+            return None
+        if abs(imb) < self.p["threshold"]:
+            return Reading("flow", 0.0, 0.15, f"Book balanced ({imb:+.0%} bid minus ask)")
+        side = "Buyers" if imb > 0 else "Sellers"
+        return Reading("flow", _clip(imb * 0.8), _clip(0.25 + abs(imb) * 0.3, 0, 0.55),
+                       f"{side} stack the book near the price ({imb:+.0%} bid minus ask)")
+
+
+class CorrelationAnalyst(Analyst):
+    key = "correlation"
+    title = "Correlation"
+    persona = "Link"
+    summary = ("Finds the market each one moves with most closely. When the partner has moved and this one "
+               "has not caught up yet, it expects the gap to close.")
+    defaults = {"window": 100, "move": 10, "min_corr": 0.6}
+
+    def read(self, s: Series) -> Reading | None:  # pragma: no cover - cross-market only
+        return None
+
+    def read_all(self, series: dict[str, Series]) -> dict[str, Reading]:
+        w, n = int(self.p["window"]), int(self.p["move"])
+        ready = {k: s for k, s in series.items() if len(s) > w + 1}
+        if len(ready) < 2:
+            return {}
+        corr = ta.correlations({k: s.close for k, s in ready.items()}, w)
+        out = {}
+        for k, s in ready.items():
+            partner, rho = max(((o, corr.get((k, o), 0.0)) for o in ready if o != k), key=lambda x: x[1])
+            if rho < self.p["min_corr"]:
+                out[k] = Reading("breadth", 0.0, 0.15, f"Moves on its own (best match {rho:+.2f})")
+                continue
+            mine, theirs = ta.log_returns(s.close[-w - 1:]), ta.log_returns(ready[partner].close[-w - 1:])
+            beta = float(np.cov(mine, theirs)[0, 1] / (np.var(theirs) or 1e-12))
+            gap = float(beta * theirs[-n:].sum() - mine[-n:].sum())
+            noise = float(np.std(mine) * np.sqrt(n)) or 1e-9
+            lean = _clip(gap / noise / 2) * rho
+            name = partner.split(":", 1)[-1]
+            if abs(lean) < 0.15:
+                note = f"In step with {name} (correlation {rho:.2f})"
+            else:
+                note = (f"Lagging {name} by {abs(gap):.2%} (correlation {rho:.2f}): "
+                        + ("room to catch up" if gap > 0 else "ahead of it, may give back"))
+            out[k] = Reading("breadth", lean, _clip(0.2 + abs(lean) * 0.5, 0, 0.7), note)
+        return out
+
+
 ANALYSTS = {cls.key: cls for cls in (
     TrendAnalyst, MomentumAnalyst, VolatilityAnalyst, BreadthAnalyst, VolumeAnalyst,
     RegimeAnalyst, StructureAnalyst, DivergenceAnalyst, RelativeStrengthAnalyst,
+    CorrelationAnalyst, FundingAnalyst, OpenInterestAnalyst, OrderBookAnalyst,
 )}

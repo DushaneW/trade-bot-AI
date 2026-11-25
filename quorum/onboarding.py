@@ -91,7 +91,7 @@ class Onboarding:
             return
         if self.state["step"] == "market":
             self.lead.say(
-                "Welcome to Quorum. I'm the Chair: I run a council of nine analysts and five traders and report to you.\n"
+                "Welcome to Quorum. I'm the Chair: I run a council of analysts and traders and report to you.\n"
                 "Nothing will analyse or trade until you connect an account and tell me to start. "
                 "Let's set it up. It takes about two minutes.")
         self._ask(self.state["step"])
@@ -280,12 +280,13 @@ class Onboarding:
         profile = value.get("choice")
         if profile not in PROFILES:
             raise ConfigError("Pick how careful the traders should be")
-        self.engine.create_team(s["account_id"], s["symbols"], s["budget"], s["traders"], profile)
+        team = self.engine.create_team(s["account_id"], s["symbols"], s["budget"], s["traders"], profile)
+        analysts = sum(1 for b in team if not b.is_trader)
         self.lead.owner_says(PROFILES[profile]["label"])
         share = s["budget"] / len(s["traders"])
         names = ", ".join(TRADERS[k].persona for k in s["traders"])
         self.lead.say(
-            f"The team is assembled. 9 analysts will watch {', '.join(s['symbols'])}, and {names} "
+            f"The team is assembled. {analysts} analysts will watch {', '.join(s['symbols'])}, and {names} "
             f"{'trades' if len(s['traders']) == 1 else 'trade'} with {share:,.2f} each on the "
             f"{PROFILES[profile]['label'].lower()} profile. Every trader has a stop loss, a daily loss limit and a "
             "drawdown limit, and you can change them on its page.")

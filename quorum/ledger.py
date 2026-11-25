@@ -17,6 +17,9 @@ class Position:
     qty: float = 0.0          # signed: >0 long, <0 short
     avg_price: float = 0.0
     peak_price: float = 0.0   # best price since entry, for trailing stops
+    stop_id: str = ""         # backup stop resting on the exchange, if any
+    stop_price: float = 0.0
+    stop_qty: float = 0.0     # size the backup stop covers; replaced when the position changes
 
     @property
     def is_open(self) -> bool:
@@ -82,7 +85,8 @@ class Ledger:
         return {
             "budget": self.budget, "cash": self.cash, "realized": self.realized, "fees": self.fees,
             "trades": self.trades, "wins": self.wins,
-            "positions": {k: [p.qty, p.avg_price, p.peak_price] for k, p in self.positions.items() if p.is_open},
+            "positions": {k: [p.qty, p.avg_price, p.peak_price, p.stop_id, p.stop_price, p.stop_qty]
+                          for k, p in self.positions.items() if p.is_open},
         }
 
     @classmethod
@@ -106,7 +110,8 @@ class Ledger:
             "trades": self.trades,
             "win_rate": self.wins / self.trades if self.trades else None,
             "positions": {
-                k: {"qty": p.qty, "avg_price": p.avg_price, "price": prices.get(k, p.avg_price)}
+                k: {"qty": p.qty, "avg_price": p.avg_price, "price": prices.get(k, p.avg_price),
+                    "stop_price": p.stop_price if p.stop_id else None}
                 for k, p in self.positions.items() if p.is_open
             },
         }

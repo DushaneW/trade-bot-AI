@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import sys
 import webbrowser
 
 import uvicorn
@@ -19,6 +21,9 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+    if args.host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("QUORUM_PASSWORD"):
+        sys.exit(f"Refusing to listen on {args.host} without a password: anyone who can reach this port could "
+                 "trade with your money. Set QUORUM_PASSWORD, or keep the default 127.0.0.1.")
     if not args.no_browser:
         webbrowser.open(f"http://{args.host}:{args.port}")
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")

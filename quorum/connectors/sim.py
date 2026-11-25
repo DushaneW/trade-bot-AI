@@ -6,12 +6,13 @@ A new candle forms every `bar_seconds` of real time.
 """
 from __future__ import annotations
 
+import itertools
 import math
 import random
 import time
 
 from ..models import Candle, Market, Side
-from .base import Connector, ExecResult, KeyCheck
+from .base import Connector, ExecResult, KeyCheck, StopState
 
 DEFAULTS = {
     "SIM-BTC": 64000.0,
@@ -81,18 +82,72 @@ class SimConnector(Connector):
     timeframe = "sim"
     poll_seconds = 1.0
     partial_last_bar = False
+    supports_stops = True
 
     def __init__(self, market: Market = Market.CRYPTO, bar_seconds: float = 4.0) -> None:
         self.market = market
         self.bar_seconds = bar_seconds
         self.paths: dict[str, _Path] = {}
+        self.stops: dict[str, dict] = {}
+        self._ids = itertools.count(1)
 
     def _path(self, symbol: str) -> _Path:
         if symbol not in self.paths:
             self.paths[symbol] = _Path(symbol, DEFAULTS.get(symbol, 100.0), self.bar_seconds)
         p = self.paths[symbol]
         p.advance()
+        self._trigger_stops(symbol, p)
         return p
+
+    def _trigger_stops(self, symbol: str, path: _Path) -> None:
+        for stop in self.stops.values():
+            if stop["symbol"] != symbol or stop["status"] != "open":
+                continue
+            for c in path.candles:
+                if c.ts <= stop["since"]:
+                    continue
+                crossed = c.low <= stop["trigger"] if stop["side"] == Side.SELL else c.high >= stop["trigger"]
+                if crossed:
+                    # A gap through the trigger fills at the open, like a real stop-market order.
+                    px = min(stop["trigger"], c.open) if stop["side"] == Side.SELL else max(stop["trigger"], c.open)
+                    stop.update(status="filled", price=px, fee=stop["qty"] * px * 0.001)
+                    break
+
+    async def place_stop(self, symbol: str, side: Side, qty: float, trigger: float) -> str:
+        path = self._path(symbol)
+        oid = f"sim-stop-{next(self._ids)}"
+        self.stops[oid] = {"symbol": symbol, "side": side, "qty": qty, "trigger": trigger,
+                           "since": path.candles[-1].ts, "status": "open"}
+        return oid
+
+    async def stop_state(self, symbol: str, order_id: str) -> StopState:
+        self._path(symbol)
+        stop = self.stops.get(order_id)
+        if stop is None or stop["status"] == "gone":
+            return StopState("gone")
+        if stop["status"] == "filled":
+            return StopState("filled", stop["price"], stop["qty"], stop["fee"])
+        return StopState("open")
+
+    async def cancel_stop(self, symbol: str, order_id: str) -> StopState:
+        state = await self.stop_state(symbol, order_id)
+        if state.status == "open":
+            self.stops[order_id]["status"] = "gone"
+            return StopState("gone")
+        return state
+
+    async def extras(self, symbol: str) -> dict[str, float]:
+        """Plausible funding, open interest and order-book readings derived from the simulated path."""
+        path = self._path(symbol)
+        closes = [c.close for c in path.candles[-60:]]
+        drift = closes[-1] / closes[0] - 1 if len(closes) > 1 else 0.0
+        rng = random.Random(f"{symbol}:{path.candles[-1].ts}")
+        return {
+            "funding_rate": 0.0001 + drift * 0.01 + rng.gauss(0, 0.00008),
+            "oi_change": drift * rng.uniform(-1.5, 2.5) + rng.gauss(0, 0.01),
+            "oi_minutes": 60.0,
+            "book_imbalance": max(-1.0, min(1.0, rng.gauss(drift * 8, 0.25))),
+        }
 
     async def candles(self, symbol: str, limit: int = 200) -> list[Candle]:
         return self._path(symbol).candles[-limit:]

@@ -7,7 +7,13 @@ import ccxt as ccxt_sync
 import ccxt.async_support as ccxt
 
 from ..models import Candle, Market, Side
-from .base import Connector, ExecResult, KeyCheck
+from .base import Connector, ExecResult, KeyCheck, StopState
+
+# Venues that keep trigger orders in a separate book and need a flag to look them up or cancel them.
+TRIGGER_PARAMS = {"okx": {"trigger": True}, "bybit": {"trigger": True}, "bitget": {"trigger": True},
+                  "kucoin": {"stop": True}, "gate": {"trigger": True}, "mexc": {"trigger": True}}
+STOP_LIMIT_ROOM = 0.01  # a stop-limit may fill up to 1% past its trigger, so a fast fall still gets out
+BOOK_DEPTH = 0.005      # order-book imbalance counts resting size within 0.5% of the mid price
 
 
 def _reason(exc: Exception) -> str:
@@ -112,6 +118,11 @@ class CryptoConnector(Connector):
         except Exception:
             return qty
 
+    @property
+    def supports_stops(self) -> bool:
+        has = self.ex.has
+        return self.has_keys and bool(has.get("createStopMarketOrder") or has.get("createStopLimitOrder"))
+
     def min_order_value(self, symbol: str) -> float:
         market = (self.ex.markets or {}).get(symbol) or {}
         return float(((market.get("limits") or {}).get("cost") or {}).get("min") or 0)
@@ -139,23 +150,128 @@ class CryptoConnector(Connector):
         if not price:
             price = float((await self.ex.fetch_ticker(symbol))["last"])
         filled = float(o.get("filled") or qty)
-
-        fee_quote, fee_base, known = 0.0, 0.0, False
-        for f in (o.get("fees") or ([o["fee"]] if o.get("fee") else [])):
-            cost, currency = float(f.get("cost") or 0), f.get("currency")
-            if not cost:
-                continue
-            known = True
-            if currency == base:
-                fee_base += cost
-                fee_quote += cost * price
-            elif currency == quote:
-                fee_quote += cost
-            else:  # paid in another token (e.g. BNB): count it at the usual taker rate
-                fee_quote += filled * price * 0.001
-        if not known:
-            fee_quote = filled * price * 0.001
+        fee_quote, fee_base = _fees(o, base, quote, price, filled)
         return ExecResult(price, filled, fee_quote, fee_base)
+
+    # ------------------------------------------------------------------ stops on the exchange
+
+    async def place_stop(self, symbol: str, side: Side, qty: float, trigger: float) -> str:
+        await self._markets()
+        qty = self.normalize_qty(symbol, qty)
+        if qty <= 0:
+            raise RuntimeError("Position is too small for a stop order")
+        trig = float(self.ex.price_to_precision(symbol, trigger))
+        if self.ex.has.get("createStopMarketOrder"):
+            o = await self.ex.create_stop_market_order(symbol, side.value, qty, trig)
+        else:
+            # Binance spot, Coinbase and Gate have no stop-market order: use a stop-limit with room to fill.
+            room = 1 - STOP_LIMIT_ROOM if side == Side.SELL else 1 + STOP_LIMIT_ROOM
+            limit = float(self.ex.price_to_precision(symbol, trigger * room))
+            o = await self.ex.create_stop_limit_order(symbol, side.value, qty, limit, trig)
+        return str(o["id"])
+
+    async def _order(self, order_id: str, symbol: str) -> dict:
+        extra = TRIGGER_PARAMS.get(self.venue)
+        if extra:
+            try:
+                return await self.ex.fetch_order(order_id, symbol, extra)
+            except ccxt.OrderNotFound:
+                pass  # some of these venues move a triggered stop into the regular book
+        return await self.ex.fetch_order(order_id, symbol)
+
+    async def stop_state(self, symbol: str, order_id: str) -> StopState:
+        await self._markets()
+        try:
+            o = await self._order(order_id, symbol)
+        except ccxt.OrderNotFound:
+            return StopState("gone")
+        filled = float(o.get("filled") or 0)
+        status = o.get("status")
+        if status == "open":
+            return StopState("open")  # waiting, or partly filled and still working: settle it once it finishes
+        if filled > 0:
+            market = self.ex.market(symbol)
+            price = float(o.get("average") or o.get("price") or 0)
+            fee_quote, _ = _fees(o, market["base"], market["quote"], price, filled)
+            return StopState("filled", price, filled, fee_quote)
+        return StopState("gone")
+
+    async def cancel_stop(self, symbol: str, order_id: str) -> StopState:
+        await self._markets()
+        try:
+            await self.ex.cancel_order(order_id, symbol, TRIGGER_PARAMS.get(self.venue, {}))
+        except ccxt.OrderNotFound:
+            pass  # already filled or gone: the state below tells which
+        except Exception:
+            state = await self.stop_state(symbol, order_id)
+            if state.status == "open":
+                raise
+            return state
+        try:
+            return await self.stop_state(symbol, order_id)
+        except Exception:
+            return StopState("gone")  # some venues cannot look up a cancelled order
+
+    # ------------------------------------------------------------------ data beyond candles
+
+    def _perp(self, symbol: str) -> str | None:
+        market = (self.ex.markets or {}).get(symbol)
+        if not market:
+            return None
+        perp = f"{market['base']}/{market['quote']}:{market['quote']}"
+        return perp if perp in self.ex.markets else None
+
+    async def extras(self, symbol: str) -> dict[str, float]:
+        await self._markets()
+        out: dict[str, float] = {}
+        try:
+            book = await self.ex.fetch_order_book(symbol, 50)
+            if book["bids"] and book["asks"]:
+                mid = (book["bids"][0][0] + book["asks"][0][0]) / 2
+                bid = sum(level[1] for level in book["bids"] if level[0] >= mid * (1 - BOOK_DEPTH))
+                ask = sum(level[1] for level in book["asks"] if level[0] <= mid * (1 + BOOK_DEPTH))
+                if bid + ask > 0:
+                    out["book_imbalance"] = (bid - ask) / (bid + ask)
+        except Exception:
+            pass  # extras are optional: the analysts that need them stay quiet
+        perp = self._perp(symbol)
+        if perp and self.ex.has.get("fetchFundingRate"):
+            try:
+                rate = (await self.ex.fetch_funding_rate(perp)).get("fundingRate")
+                if rate is not None:
+                    out["funding_rate"] = float(rate)
+            except Exception:
+                pass
+        if perp and self.ex.has.get("fetchOpenInterestHistory"):
+            try:
+                rows = await self.ex.fetch_open_interest_history(perp, "5m", limit=13)
+                amounts = [float(r.get("openInterestAmount") or r.get("openInterestValue") or 0) for r in rows]
+                if len(amounts) >= 2 and amounts[0] > 0:
+                    out["oi_change"] = amounts[-1] / amounts[0] - 1
+                    out["oi_minutes"] = 5.0 * (len(amounts) - 1)
+            except Exception:
+                pass
+        return out
 
     async def close(self) -> None:
         await self.ex.close()
+
+
+def _fees(o: dict, base: str, quote: str, price: float, filled: float) -> tuple[float, float]:
+    """(fee in quote, part of it taken from the bought coin) for a ccxt order."""
+    fee_quote, fee_base, known = 0.0, 0.0, False
+    for f in (o.get("fees") or ([o["fee"]] if o.get("fee") else [])):
+        cost, currency = float(f.get("cost") or 0), f.get("currency")
+        if not cost:
+            continue
+        known = True
+        if currency == base:
+            fee_base += cost
+            fee_quote += cost * price
+        elif currency == quote:
+            fee_quote += cost
+        else:  # paid in another token (e.g. BNB): count it at the usual taker rate
+            fee_quote += filled * price * 0.001
+    if not known:
+        fee_quote = filled * price * 0.001
+    return fee_quote, fee_base

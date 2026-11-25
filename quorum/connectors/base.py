@@ -28,12 +28,22 @@ class ExecResult:
     fee_base: float = 0.0   # part of the fee taken from the bought asset itself (you receive less of it)
 
 
+@dataclass
+class StopState:
+    """Where a resting stop order on the exchange stands."""
+    status: str          # "open" | "filled" | "gone" (cancelled, expired or rejected without filling)
+    price: float = 0.0   # average fill price when filled
+    qty: float = 0.0     # filled quantity
+    fee: float = 0.0     # fee in the quote currency
+
+
 class Connector(ABC):
     market: Market
     venue: str
     timeframe: str = "5m"
     poll_seconds: float = 15.0
     partial_last_bar: bool = True  # venue returns the still-forming candle last
+    supports_stops: bool = False   # can keep a stop order resting on the exchange
 
     @abstractmethod
     async def candles(self, symbol: str, limit: int = 200) -> list[Candle]: ...
@@ -51,6 +61,23 @@ class Connector(ABC):
 
     def normalize_qty(self, symbol: str, qty: float) -> float:
         return qty
+
+    # Stops that live on the exchange, so a position stays protected while this computer is off.
+
+    async def place_stop(self, symbol: str, side: Side, qty: float, trigger: float) -> str:
+        """Rest a stop order that sells (or buys back) `qty` once price crosses `trigger`. Returns its id."""
+        raise NotImplementedError(f"{self.venue} stop orders are not supported")
+
+    async def stop_state(self, symbol: str, order_id: str) -> StopState:
+        raise NotImplementedError
+
+    async def cancel_stop(self, symbol: str, order_id: str) -> StopState:
+        """Cancel a stop. If it filled first, the returned state says so and carries the fill."""
+        raise NotImplementedError
+
+    async def extras(self, symbol: str) -> dict[str, float]:
+        """Data beyond candles (funding, open interest, order book). Empty when the venue offers none."""
+        return {}
 
     def min_order_value(self, symbol: str) -> float:
         """Smallest order the venue accepts, in the quote currency. 0 when the venue doesn't say."""

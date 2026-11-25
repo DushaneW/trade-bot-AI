@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quorum-council"
-version = "0.1.0"
+version = "0.2.0"
 description = "A self-hosted council of trading bots: analysts vote, traders act on capped budgets, a lead reports to you."
 readme = "README.md"
 license = "MIT"

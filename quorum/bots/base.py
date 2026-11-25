@@ -21,6 +21,7 @@ class Series:
     low: np.ndarray
     close: np.ndarray
     volume: np.ndarray
+    extra: dict[str, float] = field(default_factory=dict)  # funding, open interest, order book; live only
 
     @property
     def price(self) -> float:
@@ -33,7 +34,7 @@ class Series:
         """The last n bars (views, not copies)."""
         if n >= len(self.close):
             return self
-        return Series(self.high[-n:], self.low[-n:], self.close[-n:], self.volume[-n:])
+        return Series(self.high[-n:], self.low[-n:], self.close[-n:], self.volume[-n:], self.extra)
 
 
 @dataclass
@@ -83,6 +84,8 @@ class Strategy(ABC):
     defaults: ClassVar[dict[str, float]] = {}
     min_bars: ClassVar[int] = 60
     lookback: ClassVar[int] = 220  # bars the strategy is shown; multi-timeframe analysts ask for more
+    markets: ClassVar[tuple[str, ...]] = ("crypto", "stocks", "forex")  # where it makes sense to hire
+    plugin: ClassVar[str | None] = None  # file name when loaded from the strategies folder
 
     def __init__(self, params: dict[str, float] | None = None) -> None:
         self.p = {**self.defaults, **(params or {})}
@@ -90,6 +93,7 @@ class Strategy(ABC):
 
 class Analyst(Strategy):
     role = "analyst"
+    needs_extras: ClassVar[bool] = False  # reads Series.extra, which only live exchanges provide
 
     @abstractmethod
     def read(self, s: Series) -> Reading | None: ...
@@ -107,6 +111,8 @@ class Analyst(Strategy):
 
 class Trader(Strategy):
     role = "trader"
+    # Values walk-forward testing may try for each parameter; untuned parameters keep their defaults.
+    tunable: ClassVar[dict[str, list[float]]] = {}
 
     @abstractmethod
     def decide(self, s: Series, pos: PositionView, council: Consensus) -> Intent | None: ...

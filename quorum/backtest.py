@@ -9,12 +9,21 @@ actually trade. Rules that keep it honest:
   * stop losses are checked on each bar's low/high, not just the close;
   * analysts warm up before the trader is allowed to act.
 
+A replay runs in two passes. The first records the council: what every
+analyst said on every bar and the weighted vote that came out of it. The
+second plays one trader against that record. Analysts never depend on the
+trader, so walk-forward testing can try many trader settings against a
+single recording.
+
 It cannot model order-book depth, partial fills, outages or funding costs,
 and a good result on one stretch of history says little about the next.
+Analysts that need live exchange data (funding, open interest, the order
+book) stay silent in a backtest.
 """
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import math
 import time
@@ -24,11 +33,11 @@ from typing import Callable
 import numpy as np
 
 from . import indicators as ta
-from .bots import ANALYSTS, TRADERS, PositionView, Series
+from .bots import ANALYSTS, TRADERS, Consensus, PositionView, Series
 from .learning import Council, regime_of
 from .ledger import Ledger
 from .models import Candle, Fill, Market, Mode, Side, new_id
-from .risk import PROFILES, RiskLimits, RiskManager, conviction
+from .risk import CORRELATED, PROFILES, RiskLimits, RiskManager, conviction
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +47,9 @@ WINDOW = 760  # history kept per bar, same as live; each strategy sees its own l
 WARMUP = 80
 MIN_SHARPE_DAYS = 30
 MAX_BARS = 5000
+CORR_EVERY = 10   # bars between correlation refreshes
+MIN_FOLD_BARS = 150
+FOLDS = 4
 
 Progress = Callable[[float], None]
 
@@ -54,6 +66,28 @@ class BacktestSpec:
     analysts: list[str] = field(default_factory=lambda: list(ANALYSTS))
 
 
+@dataclass
+class Tape:
+    """Everything the council said on every bar of a replay."""
+    ts: list[int]
+    keys: list[str]
+    arrays: dict[str, tuple[np.ndarray, ...]]   # open, high, low, close, volume per market
+    votes: list[dict[str, Consensus]]           # index = bar; empty before the warmup ends
+    regimes: list[dict[str, str]]
+    corr: list[dict[tuple[str, str], float]]
+    council: Council
+    analysts: dict
+    bar_ms: int
+
+    def __len__(self) -> int:
+        return len(self.ts)
+
+    def series(self, key: str, i: int) -> Series:
+        lo = max(0, i + 1 - WINDOW)
+        _, high, low, close, volume = (a[lo:i + 1] for a in self.arrays[key])
+        return Series(high, low, close, volume)
+
+
 def _align(history: dict[str, list[Candle]]) -> tuple[list[int], dict[str, list[Candle]]]:
     """Keep only timestamps every symbol has, so multi-market traders see one clock."""
     common = set.intersection(*(set(c.ts for c in cs) for cs in history.values()))
@@ -62,28 +96,55 @@ def _align(history: dict[str, list[Candle]]) -> tuple[list[int], dict[str, list[
     return ts, aligned
 
 
-def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress: Progress | None = None) -> dict:
-    if spec.strategy not in TRADERS:
-        raise ValueError(f"Unknown trader strategy: {spec.strategy}")
+def record(spec: BacktestSpec, history: dict[str, list[Candle]], progress: Progress | None = None) -> Tape:
+    """Pass one: replay the analysts and the council over the whole history."""
     ts, data = _align(history)
     n = len(ts)
     if n < WARMUP + 20:
         raise ValueError(f"Only {n} bars of shared history; need at least {WARMUP + 20}")
+    analysts = {k: ANALYSTS[k]() for k in spec.analysts
+                if k in ANALYSTS and spec.market.value in ANALYSTS[k].markets and not ANALYSTS[k].needs_extras}
+    arrays = {k: tuple(np.array(x, dtype=float) for x in zip(*[(c.open, c.high, c.low, c.close, c.volume) for c in cs]))
+              for k, cs in data.items()}
+    tape = Tape(ts, list(data), arrays, [{} for _ in range(n)], [{} for _ in range(n)], [{} for _ in range(n)],
+                Council(), analysts, ts[1] - ts[0])
+    corr: dict[tuple[str, str], float] = {}
+    for i in range(WARMUP, n):
+        t = ts[i]
+        series = {k: tape.series(k, i) for k in tape.keys}
+        closes = {k: s.price for k, s in series.items()}
+        regime = {k: regime_of(ta.efficiency_ratio(s.close, 30)) for k, s in series.items()}
+        if (i - WARMUP) % CORR_EVERY == 0:
+            corr = ta.correlations({k: s.close for k, s in series.items()})
+        tape.council.score(closes, t)
+        for aid, analyst in analysts.items():
+            seen = {k: s.tail(analyst.lookback) for k, s in series.items()}
+            for key, reading in analyst.read_all(seen).items():
+                s = series[key].tail(220)
+                atr_frac = float(ta.atr(s.high, s.low, s.close)[-1] / s.price)
+                tape.council.hear(aid, key, reading, s.price, t, tape.bar_ms, atr_frac, regime[key])
+        tape.votes[i] = {k: tape.council.consensus(k, t, tape.bar_ms, regime[k]) for k in tape.keys}
+        tape.regimes[i] = regime
+        tape.corr[i] = corr
+        if progress and (i - WARMUP) % 50 == 0:
+            progress((i - WARMUP) / (n - WARMUP))
+    return tape
 
-    started = time.perf_counter()
-    trader = TRADERS[spec.strategy](spec.params)
-    analysts = {k: ANALYSTS[k]() for k in spec.analysts if k in ANALYSTS}
+
+def simulate(spec: BacktestSpec, tape: Tape, start: int | None = None, end: int | None = None,
+             params: dict[str, float] | None = None) -> dict:
+    """Pass two: one trader with a fresh budget, trading bars [start, end) of the recording."""
+    if spec.strategy not in TRADERS:
+        raise ValueError(f"Unknown trader strategy: {spec.strategy}")
+    start = max(WARMUP, start or WARMUP)
+    end = min(len(tape), end or len(tape))
+    trader = TRADERS[spec.strategy]({**spec.params, **(params or {})})
     profile = PROFILES.get(spec.profile, PROFILES["balanced"])
     limits = RiskLimits.from_dict({**profile["limits"].to_dict(), **spec.limits})
     size_mult = profile["size"]
     risk = RiskManager()
-    council = Council()
     ledger = Ledger(spec.budget)
-    bar_ms = ts[1] - ts[0]
-
-    arrays = {k: tuple(np.array(x, dtype=float) for x in zip(*[(c.open, c.high, c.low, c.close, c.volume) for c in cs]))
-              for k, cs in data.items()}
-    keys = list(data)
+    keys, arrays = tape.keys, tape.arrays
 
     equity_curve: list[tuple[int, float]] = []
     trades: list[dict] = []
@@ -91,7 +152,7 @@ def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress:
     paused: str | None = None
     exposure_bars = 0
     day, day_start = None, spec.budget
-    hold_qty = {k: (spec.budget / len(keys)) / arrays[k][3][WARMUP] for k in keys}
+    hold_qty = {k: (spec.budget / len(keys)) / arrays[k][3][start] for k in keys}
 
     def fill(key: str, side: Side, qty: float, price: float, reason: str, t: int) -> None:
         slip = SLIPPAGE if side == Side.BUY else -SLIPPAGE
@@ -101,8 +162,12 @@ def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress:
         trades.append({"ts": t, "symbol": key, "side": side.value, "qty": qty, "price": px,
                        "fee": f.fee, "pnl": f.pnl, "reason": reason})
 
-    for i in range(WARMUP, n):
-        t = ts[i]
+    def correlated(key: str, corr: dict, prices: dict[str, float]) -> float:
+        return sum(abs(p.qty) * prices[o] * corr.get((key, o), 0.0) for o, p in ledger.positions.items()
+                   if o != key and p.qty > 0 and corr.get((key, o), 0.0) >= CORRELATED)
+
+    for i in range(start, end):
+        t = tape.ts[i]
         opens = {k: arrays[k][0][i] for k in keys}
 
         # 1. Orders decided last bar fill at this bar's open.
@@ -113,7 +178,8 @@ def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress:
                     fill(key, side, abs(pos.qty), opens[key], reason[5:], t)
                 continue
             equity = ledger.equity(opens)
-            verdict = risk.review(ledger, limits, spec.market, key, side, qty, opens[key], equity)
+            verdict = risk.review(ledger, limits, spec.market, key, side, qty, opens[key], equity,
+                                  correlated=correlated(key, tape.corr[i - 1], opens))
             if verdict.approved:
                 fill(key, side, verdict.qty, opens[key], reason, t)
         pending = []
@@ -151,27 +217,13 @@ def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress:
                     if pos.is_open:
                         pending.append((key, Side.SELL if pos.qty > 0 else Side.BUY, abs(pos.qty), f"exit:{paused}"))
 
-        # 4. Analysts read the closed bar, the council learns, the trader decides.
-        series, regime = {}, {}
-        for k in keys:
-            lo = max(0, i + 1 - WINDOW)
-            _, high, low, close, volume = (a[lo:i + 1] for a in arrays[k])
-            series[k] = Series(high, low, close, volume)
-            regime[k] = regime_of(ta.efficiency_ratio(close, 30))
-        council.score(closes, t)
-        for aid, analyst in analysts.items():
-            seen = {k: s.tail(analyst.lookback) for k, s in series.items()}
-            for key, reading in analyst.read_all(seen).items():
-                s = series[key].tail(220)
-                atr_frac = float(ta.atr(s.high, s.low, s.close)[-1] / s.price)
-                council.hear(aid, key, reading, s.price, t, bar_ms, atr_frac, regime[key])
-
-        if paused or i == n - 1:
+        # 4. The trader reads the closed bar and the council's vote on it.
+        if paused or i == end - 1:
             continue
         for key in keys:
-            s = series[key].tail(trader.lookback)
+            s = tape.series(key, i).tail(trader.lookback)
             pos = ledger.position(key)
-            vote = council.consensus(key, t, bar_ms, regime[key])
+            vote = tape.votes[i][key]
             intent = trader.decide(s, PositionView(pos.qty, pos.avg_price), vote)
             if intent is None:
                 continue
@@ -182,25 +234,114 @@ def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress:
                 size = min(max(intent.size, 0) * size_mult * conviction(vote.direction), 1)
                 pending.append((key, intent.side, equity * size / closes[key], intent.reason))
 
-        if progress and (i - WARMUP) % 50 == 0:
-            progress((i - WARMUP) / (n - WARMUP))
-
     # Mark open positions at the final close; report them rather than pretending they closed.
-    final_close = {k: arrays[k][3][-1] for k in keys}
-    hold_curve = [(t, sum(hold_qty[k] * arrays[k][3][WARMUP + j] for k in keys)) for j, (t, _) in enumerate(equity_curve)]
-    result = _metrics(spec, equity_curve, hold_curve, trades, ledger, final_close, exposure_bars, bar_ms)
+    final_close = {k: arrays[k][3][end - 1] for k in keys}
+    hold_curve = [(t, sum(hold_qty[k] * arrays[k][3][start + j] for k in keys)) for j, (t, _) in enumerate(equity_curve)]
+    result = _metrics(spec, equity_curve, hold_curve, trades, ledger.fees, ledger.equity(final_close),
+                      exposure_bars, tape.bar_ms)
     result.update(
         paused=paused,
         bars=len(equity_curve),
-        bar_ms=bar_ms,
+        bar_ms=tape.bar_ms,
         start=equity_curve[0][0],
         end=equity_curve[-1][0],
+        params=trader.p,
         open_positions={k: {"qty": p.qty, "avg_price": p.avg_price, "price": final_close[k]}
                         for k, p in ledger.positions.items() if p.is_open},
-        analysts=[{"key": aid, "title": a.title, "persona": a.persona, **council.rep(aid).to_dict()}
-                  for aid, a in analysts.items()],
-        seconds=round(time.perf_counter() - started, 2),
     )
+    return result
+
+
+def _analyst_report(tape: Tape) -> list[dict]:
+    return [{"key": aid, "title": a.title, "persona": a.persona, **tape.council.rep(aid).to_dict()}
+            for aid, a in tape.analysts.items()]
+
+
+def run_backtest(spec: BacktestSpec, history: dict[str, list[Candle]], progress: Progress | None = None) -> dict:
+    started = time.perf_counter()
+    tape = record(spec, history, (lambda p: progress(p * 0.95)) if progress else None)
+    result = simulate(spec, tape)
+    result.update(analysts=_analyst_report(tape), seconds=round(time.perf_counter() - started, 2))
+    if progress:
+        progress(1.0)
+    return result
+
+
+def _grid(strategy: str) -> list[dict[str, float]]:
+    tunable = TRADERS[strategy].tunable
+    if not tunable:
+        return [{}]
+    names = list(tunable)
+    return [dict(zip(names, combo)) for combo in itertools.product(*(tunable[n] for n in names))]
+
+
+def _score(r: dict) -> float:
+    """What tuning optimises: return, with drawdown counted against it."""
+    return r["return"] + 0.5 * r["max_drawdown"]
+
+
+def run_walk_forward(spec: BacktestSpec, history: dict[str, list[Candle]], progress: Progress | None = None,
+                     folds: int = FOLDS) -> dict:
+    """Tune on one stretch, trade the next with what was picked, roll forward. Only the unseen stretches count."""
+    started = time.perf_counter()
+    tape = record(spec, history, (lambda p: progress(p * 0.7)) if progress else None)
+    usable = len(tape) - WARMUP
+    chunk = usable // (folds + 1)
+    if chunk < MIN_FOLD_BARS:
+        raise ValueError(f"Walk-forward needs at least {MIN_FOLD_BARS * (folds + 1) + WARMUP} bars; "
+                         f"this history has {len(tape)}. Pick a longer history")
+    bounds = [WARMUP + chunk * f for f in range(folds + 1)] + [len(tape)]
+    grid = _grid(spec.strategy)
+    rows, tests = [], []
+    for f in range(1, folds + 1):
+        train = (bounds[f - 1], bounds[f])
+        test = (bounds[f], bounds[f + 1])
+        tried = [(simulate(spec, tape, *train, params=p), p) for p in grid]
+        best, picked = max(tried, key=lambda x: _score(x[0]))
+        out = simulate(spec, tape, *test, params=picked)
+        baseline = simulate(spec, tape, *test)
+        tests.append(out)
+        rows.append({"train_start": tape.ts[train[0]], "test_start": tape.ts[test[0]], "test_end": tape.ts[test[1] - 1],
+                     "params": picked, "train_return": best["return"], "test_return": out["return"],
+                     "default_return": baseline["return"], "test_buy_hold": out["buy_hold_return"],
+                     "test_drawdown": out["max_drawdown"], "trades": out["trades"]})
+        if progress:
+            progress(0.7 + 0.3 * f / folds)
+
+    # Stitch the unseen stretches into one account: each picks up where the last one ended.
+    curve, hold, trades = [], [], []
+    equity, held = spec.budget, spec.budget
+    for out in tests:
+        scale, hscale = equity / spec.budget, held / spec.budget
+        curve += [[t, v * scale] for t, v in out["equity_curve"]]
+        hold += [[t, v * hscale] for t, v in out["hold_curve"]]
+        trades += [{**t, "pnl": t["pnl"] * scale} for t in out["trade_log"]]
+        equity, held = out["final_equity"] * scale, out["hold_final"] * hscale
+    values = np.array([v for _, v in curve])
+    peak = np.maximum.accumulate(values)
+    closed = [t for t in trades if t["pnl"] != 0]
+    gains = sum(t["pnl"] for t in closed if t["pnl"] > 0)
+    losses = -sum(t["pnl"] for t in closed if t["pnl"] < 0)
+    in_sample = float(np.mean([r["train_return"] for r in rows]))
+    out_sample = float(np.mean([r["test_return"] for r in rows]))
+    result = {
+        "strategy": spec.strategy, "title": TRADERS[spec.strategy].title, "persona": TRADERS[spec.strategy].persona,
+        "symbols": spec.symbols, "budget": spec.budget, "final_equity": equity,
+        "return": equity / spec.budget - 1, "buy_hold_return": held / spec.budget - 1,
+        "max_drawdown": float(((values - peak) / peak).min()), "sharpe": None,
+        "trades": sum(o["trades"] for o in tests), "closed_trades": len(closed),
+        "win_rate": (sum(1 for t in closed if t["pnl"] > 0) / len(closed)) if closed else None,
+        "profit_factor": (gains / losses) if losses > 0 else None,
+        "fees": sum(o["fees"] for o in tests),
+        "exposure": float(np.mean([o["exposure"] for o in tests])),
+        "equity_curve": curve, "hold_curve": hold, "trade_log": trades[-200:],
+        "paused": next((o["paused"] for o in tests if o["paused"]), None),
+        "bars": sum(o["bars"] for o in tests), "bar_ms": tape.bar_ms,
+        "start": curve[0][0], "end": curve[-1][0], "open_positions": tests[-1]["open_positions"],
+        "analysts": _analyst_report(tape), "seconds": round(time.perf_counter() - started, 2),
+        "walk_forward": {"folds": rows, "settings_tried": len(grid), "in_sample": in_sample,
+                         "out_of_sample": out_sample, "tunable": list(TRADERS[spec.strategy].tunable)},
+    }
     if progress:
         progress(1.0)
     return result
@@ -230,6 +371,9 @@ class BacktestRunner:
         bars = int(data.get("bars") or 1000)
         if not WARMUP + 20 <= bars <= MAX_BARS:
             raise ConfigError(f"History length must be between {WARMUP + 20} and {MAX_BARS} bars")
+        walk = bool(data.get("walk_forward"))
+        if walk and bars < MIN_FOLD_BARS * (FOLDS + 1) + WARMUP:
+            raise ConfigError(f"Walk-forward needs at least {MIN_FOLD_BARS * (FOLDS + 1) + WARMUP} bars of history")
         budget = float(data.get("budget") or 100)
         if budget <= 0:
             raise ConfigError("Budget must be above zero")
@@ -240,7 +384,7 @@ class BacktestRunner:
         run = {"id": new_id("bt"), "status": "queued", "progress": 0.0, "created": int(time.time() * 1000),
                "strategy": strategy, "title": TRADERS[strategy].title, "persona": TRADERS[strategy].persona,
                "account": acc.record["name"], "symbols": symbols, "bars": bars, "budget": budget,
-               "profile": spec.profile,
+               "profile": spec.profile, "walk_forward": walk,
                "bot_id": data.get("bot_id")}
         self.runs[run["id"]] = run
         for old in sorted(self.runs.values(), key=lambda r: r["created"])[:-self.keep]:
@@ -267,7 +411,8 @@ class BacktestRunner:
                     run["progress"] = round(p, 3)
                     loop.call_soon_threadsafe(self._emit, run)
 
-                run["result"] = await asyncio.to_thread(run_backtest, spec, history, progress)
+                job = run_walk_forward if run["walk_forward"] else run_backtest
+                run["result"] = await asyncio.to_thread(job, spec, history, progress)
                 run["status"] = "done"
                 run["summary"] = {k: run["result"][k] for k in
                                   ("return", "buy_hold_return", "max_drawdown", "trades", "win_rate", "sharpe")}
@@ -277,7 +422,8 @@ class BacktestRunner:
             self._emit(run)
 
 
-def _metrics(spec: BacktestSpec, curve, hold_curve, trades, ledger: Ledger, final_close, exposure_bars, bar_ms) -> dict:
+def _metrics(spec: BacktestSpec, curve, hold_curve, trades, fees: float, final_equity: float,
+             exposure_bars: int, bar_ms: int) -> dict:
     values = np.array([v for _, v in curve])
     hold = np.array([v for _, v in hold_curve])
     rets = np.diff(values) / values[:-1]
@@ -291,7 +437,6 @@ def _metrics(spec: BacktestSpec, curve, hold_curve, trades, ledger: Ledger, fina
     closed = [t for t in trades if t["pnl"] != 0]
     gains = sum(t["pnl"] for t in closed if t["pnl"] > 0)
     losses = -sum(t["pnl"] for t in closed if t["pnl"] < 0)
-    final_equity = ledger.equity(final_close)
     step = max(1, len(curve) // 400)  # keep the payload small; the chart does not need every bar
     return {
         "strategy": spec.strategy,
@@ -300,6 +445,7 @@ def _metrics(spec: BacktestSpec, curve, hold_curve, trades, ledger: Ledger, fina
         "symbols": spec.symbols,
         "budget": spec.budget,
         "final_equity": final_equity,
+        "hold_final": float(hold[-1]),
         "return": final_equity / spec.budget - 1,
         "buy_hold_return": float(hold[-1] / spec.budget - 1),
         "max_drawdown": max_dd,
@@ -308,7 +454,7 @@ def _metrics(spec: BacktestSpec, curve, hold_curve, trades, ledger: Ledger, fina
         "closed_trades": len(closed),
         "win_rate": (sum(1 for t in closed if t["pnl"] > 0) / len(closed)) if closed else None,
         "profit_factor": (gains / losses) if losses > 0 else None,
-        "fees": ledger.fees,
+        "fees": fees,
         "exposure": exposure_bars / len(curve),
         "equity_curve": [[int(t), round(float(v), 4)] for t, v in curve[::step]],
         "hold_curve": [[int(t), round(float(v), 4)] for t, v in hold_curve[::step]],

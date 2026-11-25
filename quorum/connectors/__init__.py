@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from ..models import Market
-from .base import Connector, ExecResult, KeyCheck
+from .base import Connector, ExecResult, KeyCheck, StopState
 from .sim import SimConnector
 
-__all__ = ["Connector", "ExecResult", "KeyCheck", "build", "VENUES"]
+__all__ = ["Connector", "ExecResult", "KeyCheck", "StopState", "build", "VENUES"]
 
 VENUES = {
     "crypto": ["binance", "bybit", "okx", "kraken", "coinbase", "kucoin", "bitget", "gate", "mexc"],

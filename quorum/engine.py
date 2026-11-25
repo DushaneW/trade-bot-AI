@@ -18,16 +18,20 @@ from . import indicators as ta
 from .bots import ANALYSTS, STRATEGIES, TRADERS, Analyst, PositionView, Series, Trader
 from .bus import Bus
 from .connectors import Connector, KeyCheck, build
+from .connectors.base import StopState
 from .learning import Council, Reputation, regime_of
 from .ledger import Ledger
 from .models import Fill, Market, Mode, Side, Signal, new_id, now_ms
-from .risk import PROFILES, RiskLimits, RiskManager, conviction
+from .risk import CORRELATED, PROFILES, RiskLimits, RiskManager, conviction
 from .security import Vault, mask
 from .storage import Store
 
 log = logging.getLogger(__name__)
 
 EQUITY_EVERY_S = 10
+STOP_CHECK_S = 20     # how often resting exchange stops are looked up
+STOP_MARGIN = 0.005   # the exchange stop sits this much past the trader's own stop: a backup, not a rival
+STOP_RETRY_S = 300    # after a refused stop, wait this long before trying again
 HISTORY_BARS = 760   # enough for multi-timeframe analysts
 WINDOW_BARS = 220    # what most strategies look at
 PAPER_REMOVED = ("Paper trading was removed in this version. This trader now places real orders, so it was "
@@ -44,6 +48,7 @@ class AccountRuntime:
     connector: Connector
     status: KeyCheck | None = None
     last_poll: float = 0.0
+    last_stop_check: float = 0.0
     error: str | None = None
 
     @property
@@ -121,6 +126,10 @@ class Engine:
         self.running = False  # the owner's go signal; until then nothing analyses or trades
         self.regime: dict[str, str] = {}  # key -> "trend" | "chop", refreshed every bar
         self.last_said: dict[str, dict[str, Any]] = {}  # bot id -> latest thing it said or did
+        self.correlation: dict[str, dict[tuple[str, str], float]] = {}  # account id -> pairwise return correlation
+        self.exchange_stops = True  # keep a backup stop resting on the exchange for every open position
+        self._stop_errors: dict[tuple[str, str], tuple[str, float]] = {}
+        self.skipped: list[str] = []  # saved bots whose strategy plugin is missing
         bus.subscribe("*", self._remember)
 
     def _remember(self, msg: dict) -> None:
@@ -134,6 +143,8 @@ class Engine:
             bot, text = d["bot"], f"Order refused: {d['reason']}"
         elif topic == "bot" and d.get("event") == "paused":
             bot, text = d["bot"], f"Paused: {d['reason']}"
+        elif topic == "stop" and d.get("event") == "placed":
+            bot, text = d["bot"], f"Backup stop for {d['key'].split(':', 1)[1]} resting on the exchange at {d['price']:.6g}"
         else:
             return
         self.last_said[bot] = {"ts": msg["ts"], "text": text, "topic": topic}
@@ -146,8 +157,15 @@ class Engine:
             await self._mount_account(rec)
         for aid, data in self.store.reputations().items():
             self.council.reputation[aid] = Reputation.from_dict(data)
+        self.exchange_stops = bool(self.store.setting("exchange_stops", True))
         for cfg in self.store.bots():
+            if cfg["strategy"] not in STRATEGIES:
+                # A strategy plugin was removed. Keep the record so restoring the file brings the bot back.
+                log.warning("Skipping bot %s: strategy %r is not installed", cfg["id"], cfg["strategy"])
+                self.skipped.append(cfg.get("name") or cfg["id"])
+                continue
             self._mount_bot(cfg)
+        self._hire_new_analysts()
         self.running = bool(self.store.setting("council_running", False)) and bool(self.bots)
         self._task = asyncio.create_task(self._run(), name="quorum-engine")
 
@@ -192,11 +210,26 @@ class Engine:
         if share < floor:
             raise ConfigError(f"{share:g} per trader is too little: each needs at least {floor:g} to place orders "
                               "above the exchange minimum. Pick fewer traders or raise the budget")
-        created = [self.create_bot({"strategy": k, "account_id": account_id, "symbols": symbols}) for k in ANALYSTS]
+        market = self.accounts[account_id].market.value
+        created = [self.create_bot({"strategy": k, "account_id": account_id, "symbols": symbols})
+                   for k, cls in ANALYSTS.items() if market in cls.markets]
         for key in traders:
             created.append(self.create_bot({"strategy": key, "account_id": account_id, "symbols": symbols,
                                              "budget": share, "profile": profile}))
         return created
+
+    def _hire_new_analysts(self) -> None:
+        """Analysts added in an update or as a plugin join every team that already exists."""
+        for acc_id, acc in self.accounts.items():
+            team = [b for b in self.bots.values() if b.config["account_id"] == acc_id]
+            if not any(not b.is_trader for b in team):
+                continue  # no team on this account yet; setup will hire everyone
+            have = {b.config["strategy"] for b in team}
+            symbols = sorted({s for b in team for s in b.config["symbols"]})
+            for key, cls in ANALYSTS.items():
+                if key not in have and acc.market.value in cls.markets:
+                    bot = self.create_bot({"strategy": key, "account_id": acc_id, "symbols": symbols})
+                    log.info("Hired new analyst %s on %s", bot.config["name"], acc_id)
 
     def min_order_value(self, account_id: str, symbol: str) -> float:
         """The larger of our own floor and what the exchange accepts, with a little headroom."""
@@ -438,6 +471,14 @@ class Engine:
                     except Exception as exc:
                         acc.error = f"Market data failed: {exc}"
                         log.warning("Tick failed for %s: %s", acc.id, exc)
+                if started - acc.last_stop_check >= STOP_CHECK_S:
+                    acc.last_stop_check = started
+                    try:
+                        await self._check_stops(acc)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        log.warning("Stop check failed for %s: %s", acc.id, exc)
             if time.time() - self._last_equity >= EQUITY_EVERY_S:
                 self._last_equity = time.time()
                 self._record_equity()
@@ -471,11 +512,14 @@ class Engine:
                 await self._guard_stops(key)
                 continue
             self.last_bar[key] = closed[-1].ts
-            self.series[key] = fresh[key] = Series(*ta.arrays(closed))
+            extra = await acc.connector.extras(symbol) if self._wants_extras(acc) else {}
+            self.series[key] = fresh[key] = Series(*ta.arrays(closed), extra=extra)
             self.regime[key] = regime_of(ta.efficiency_ratio(fresh[key].close, 30))
             self.bus.publish("bar", {"key": key, "close": closed[-1].close, "ts": closed[-1].ts}, keep=False)
         if not fresh:
             return
+        mine = {k: s.close for k, s in self.series.items() if k.startswith(f"{acc.id}:")}
+        self.correlation[acc.id] = ta.correlations(mine)
 
         now = now_ms()
         for aid, hit in self.council.score(self.prices, now):
@@ -500,6 +544,24 @@ class Engine:
         traders = [b for b in self.bots.values() if b.is_trader and b.config["account_id"] == acc.id]
         for bot in traders:
             await self._tick_trader(bot, fresh, now)
+
+    def _wants_extras(self, acc: AccountRuntime) -> bool:
+        return any(b.active and not b.is_trader and b.config["account_id"] == acc.id
+                   and getattr(b.strategy, "needs_extras", False) for b in self.bots.values())
+
+    def _correlated_exposure(self, bot: BotRuntime, key: str) -> float:
+        """Money this trader already has in other markets that move with `key`, weighted by how closely."""
+        assert bot.ledger is not None
+        corr = self.correlation.get(bot.config["account_id"], {})
+        total = 0.0
+        for other, pos in bot.ledger.positions.items():
+            if other == key or not pos.is_open:
+                continue
+            rho = corr.get((key, other), 0.0)
+            # Both long and clearly moving together: one bet, twice. Loosely related markets are not counted.
+            if rho >= CORRELATED and pos.qty > 0:
+                total += abs(pos.qty) * self.prices.get(other, pos.avg_price) * rho
+        return total
 
     async def _guard_stops(self, key: str) -> None:
         """Between bars, still enforce stop losses on the live price."""
@@ -567,14 +629,28 @@ class Engine:
             verdict_qty, note = qty, None
         else:
             limits = replace(bot.limits, min_order_value=self.min_order_value(acc.id, symbol))
-            verdict = self.risk.review(bot.ledger, limits, acc.market, key, side, qty, price, equity)
+            verdict = self.risk.review(bot.ledger, limits, acc.market, key, side, qty, price, equity,
+                                       correlated=self._correlated_exposure(bot, key))
             if not verdict.approved:
                 self.bus.publish("rejected", {"bot": bot.id, "bot_name": bot.config["name"], "key": key,
                                               "side": side.value, "reason": verdict.reason, "intent": reason})
                 return
             verdict_qty, note = verdict.qty, verdict.reason
 
-        order_id = new_id("ord")
+        pos = bot.ledger.position(key)
+        reducing = pos.is_open and (pos.qty > 0) == (side == Side.SELL)
+        if reducing and pos.stop_id:
+            # The resting stop holds the coins on the exchange; take it down before selling them.
+            try:
+                still_open = await self._release_stop(bot, key)
+            except Exception:
+                return  # reported by _release_stop; the stop keeps protecting the position
+            if not still_open:  # the exchange stop got there first and has been booked
+                pos = bot.ledger.position(key)
+                if not pos.is_open:
+                    return
+                verdict_qty = min(verdict_qty, abs(pos.qty))
+
         try:
             res = await acc.connector.market_order(symbol, side, acc.connector.normalize_qty(symbol, verdict_qty))
             fill_price, fee = res.price, res.fee
@@ -584,10 +660,18 @@ class Engine:
             log.exception("Order failed for bot %s", bot.id)
             self.bus.publish("error", {"bot": bot.id, "bot_name": bot.config["name"], "key": key,
                                        "message": f"Order failed: {exc}"})
+            await self._sync_stop(bot, key)  # put the protection back if the exit did not go through
             return
 
-        fill = Fill(order_id, bot.id, key, side, fill_qty, fill_price, fee, bot.mode,
+        fill = Fill(new_id("ord"), bot.id, key, side, fill_qty, fill_price, fee, bot.mode,
                     reason + (f" ({note})" if note else ""))
+        self._book(bot, key, fill, council)
+        await self._sync_stop(bot, key)
+
+    def _book(self, bot: BotRuntime, key: str, fill: Fill, council: Any = None) -> None:
+        assert bot.ledger is not None
+        acc = self.accounts[bot.config["account_id"]]
+        symbol, side, fill_price = key.split(":", 1)[1], fill.side, fill.price
         fill.pnl = bot.ledger.apply(fill)
         left = bot.ledger.position(key)
         if side == Side.SELL and left.is_open and abs(left.qty) * fill_price < self.min_order_value(acc.id, symbol) / 2:
@@ -603,6 +687,119 @@ class Engine:
         self.store.add_fill(payload)
         self._save_bot(bot)
         self.bus.publish("fill", payload)
+
+    # ------------------------------------------------------------------ backup stops on the exchange
+
+    def _stop_trigger(self, bot: BotRuntime, qty: float, avg_price: float) -> float:
+        pct = bot.limits.stop_loss_pct + STOP_MARGIN
+        return avg_price * (1 - pct) if qty > 0 else avg_price * (1 + pct)
+
+    async def _sync_stop(self, bot: BotRuntime, key: str) -> None:
+        """Keep exactly one backup stop on the exchange, sized and priced for this trader's position."""
+        assert bot.ledger is not None
+        acc = self.accounts[bot.config["account_id"]]
+        pos = bot.ledger.position(key)
+        wanted = (self.exchange_stops and acc.connector.supports_stops and pos.is_open
+                  and bot.limits.stop_loss_pct > 0)
+        if pos.stop_id:
+            trigger = self._stop_trigger(bot, pos.qty, pos.avg_price) if pos.is_open else 0.0
+            current = (wanted and abs(pos.stop_qty - abs(pos.qty)) <= abs(pos.qty) * 1e-6
+                       and abs(pos.stop_price - trigger) <= trigger * 1e-6)
+            if current:
+                return
+            try:
+                if not await self._release_stop(bot, key):
+                    return  # it filled while we looked; booked, and the next check covers any remainder
+            except Exception:
+                return
+            pos = bot.ledger.position(key)
+        if not wanted or not pos.is_open:
+            return
+        trigger = self._stop_trigger(bot, pos.qty, pos.avg_price)
+        price = self.prices.get(key)
+        if price and ((pos.qty > 0 and price <= trigger) or (pos.qty < 0 and price >= trigger)):
+            return  # already through the level: the trader's own stop is closing it
+        slot = (bot.id, key)
+        last = self._stop_errors.get(slot)
+        if last and time.time() - last[1] < STOP_RETRY_S:
+            return
+        symbol = key.split(":", 1)[1]
+        try:
+            pos.stop_id = await acc.connector.place_stop(symbol, Side.SELL if pos.qty > 0 else Side.BUY,
+                                                         abs(pos.qty), trigger)
+        except Exception as exc:
+            msg = f"Couldn't place a backup stop for {symbol} on the exchange: {exc}"
+            if not last or last[0] != msg:  # say it once, not every retry
+                self.bus.publish("error", {"bot": bot.id, "bot_name": bot.config["name"], "key": key, "message": msg})
+            self._stop_errors[slot] = (msg, time.time())
+            return
+        pos.stop_price, pos.stop_qty = trigger, abs(pos.qty)
+        self._stop_errors.pop(slot, None)
+        self._save_bot(bot)
+        self.bus.publish("stop", {"event": "placed", "bot": bot.id, "bot_name": bot.config["name"], "key": key,
+                                  "price": trigger, "qty": pos.stop_qty})
+
+    async def _release_stop(self, bot: BotRuntime, key: str) -> bool:
+        """Cancel the backup stop. False when it had already filled (that fill is booked here)."""
+        assert bot.ledger is not None
+        pos = bot.ledger.position(key)
+        if not pos.stop_id:
+            return True
+        acc = self.accounts[bot.config["account_id"]]
+        try:
+            state = await acc.connector.cancel_stop(key.split(":", 1)[1], pos.stop_id)
+        except Exception as exc:
+            log.warning("Cancelling stop %s failed: %s", pos.stop_id, exc)
+            self.bus.publish("error", {"bot": bot.id, "bot_name": bot.config["name"], "key": key,
+                                       "message": f"Couldn't cancel the backup stop on the exchange: {exc}"})
+            raise
+        if state.status == "filled":
+            self._book_stop_fill(bot, key, state)
+            return False
+        pos.stop_id, pos.stop_price, pos.stop_qty = "", 0.0, 0.0
+        self._save_bot(bot)
+        return True
+
+    def _book_stop_fill(self, bot: BotRuntime, key: str, state: StopState) -> None:
+        assert bot.ledger is not None
+        pos = bot.ledger.position(key)
+        price = state.price or pos.stop_price
+        qty = min(state.qty, abs(pos.qty)) if state.qty else abs(pos.qty)
+        side = Side.SELL if pos.qty > 0 else Side.BUY
+        pos.stop_id, pos.stop_price, pos.stop_qty = "", 0.0, 0.0
+        if qty <= 0 or price <= 0:
+            return
+        fill = Fill(new_id("ord"), bot.id, key, side, qty, price, state.fee, bot.mode,
+                    "Backup stop filled on the exchange")
+        self._book(bot, key, fill)
+
+    async def _check_stops(self, acc: AccountRuntime) -> None:
+        """Settle stops that filled (perhaps while Quorum was off) and place any that are missing."""
+        for bot in [b for b in self.bots.values() if b.ledger and b.config["account_id"] == acc.id]:
+            assert bot.ledger is not None
+            for key, pos in list(bot.ledger.positions.items()):
+                if not pos.is_open and not pos.stop_id:
+                    continue
+                if pos.stop_id:
+                    try:
+                        state = await acc.connector.stop_state(key.split(":", 1)[1], pos.stop_id)
+                    except Exception as exc:
+                        log.warning("Looking up stop %s failed: %s", pos.stop_id, exc)
+                        continue
+                    if state.status == "filled":
+                        self._book_stop_fill(bot, key, state)
+                    elif state.status == "gone":
+                        pos.stop_id, pos.stop_price, pos.stop_qty = "", 0.0, 0.0  # cancelled elsewhere: replace it
+                        self._save_bot(bot)
+                await self._sync_stop(bot, key)
+
+    async def set_exchange_stops(self, on: bool) -> None:
+        self.exchange_stops = on
+        self.store.set_setting("exchange_stops", on)
+        for bot in list(self.bots.values()):
+            if bot.ledger:
+                for key in list(bot.ledger.positions):
+                    await self._sync_stop(bot, key)
 
     def _record_equity(self) -> None:
         ts = now_ms()
@@ -623,7 +820,7 @@ class Engine:
             "title": bot.strategy.title, "role": bot.strategy.role, "summary": bot.strategy.summary,
             "account_id": bot.config["account_id"], "symbols": bot.config["symbols"],
             "enabled": bot.config.get("enabled", True), "paused_reason": bot.paused_reason,
-            "params": bot.strategy.p, "last_action": bot.last_action,
+            "params": bot.strategy.p, "last_action": bot.last_action, "plugin": bot.strategy.plugin,
             "last": self.last_said.get(bot.id),
         }
         if bot.ledger:
@@ -648,6 +845,8 @@ class Engine:
         return {
             "halted": self.risk.halted,
             "running": self.running,
+            "exchange_stops": self.exchange_stops,
+            "skipped_bots": self.skipped,
             "accounts": [a.public() for a in self.accounts.values()],
             "bots": bots,
             "markets": markets,

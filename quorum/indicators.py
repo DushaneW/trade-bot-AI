@@ -71,3 +71,21 @@ def zscore(close: np.ndarray, n: int = 20) -> float:
 
 def log_returns(close: np.ndarray) -> np.ndarray:
     return np.diff(np.log(close))
+
+
+def correlations(closes: dict[str, np.ndarray], n: int = 100) -> dict[tuple[str, str], float]:
+    """Pairwise correlation of the last `n` log returns, both orderings of every pair."""
+    keys = [k for k, c in closes.items() if len(c) > 10]
+    if len(keys) < 2:
+        return {}
+    m = min(n, min(len(closes[k]) for k in keys) - 1)
+    rets = np.array([log_returns(closes[k][-m - 1:]) for k in keys])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        corr = np.corrcoef(rets)
+    out = {}
+    for i, a in enumerate(keys):
+        for j, b in enumerate(keys):
+            if i != j:
+                v = corr[i, j]
+                out[(a, b)] = float(v) if np.isfinite(v) else 0.0
+    return out

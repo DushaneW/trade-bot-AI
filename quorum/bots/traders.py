@@ -22,6 +22,7 @@ class TrendRider(Trader):
     persona = "Rider"
     summary = "Buys EMA crossovers when the council agrees on direction; exits on the reverse cross."
     defaults = {"fast": 12, "slow": 34, "agree": 0.1, "size": 0.45}
+    tunable = {"fast": [8, 12, 20], "slow": [26, 34, 55]}
 
     def decide(self, s: Series, pos: PositionView, council: Consensus) -> Intent | None:
         fast = ta.ema(s.close, int(self.p["fast"]))
@@ -42,6 +43,7 @@ class MeanReverter(Trader):
     persona = "Elastic"
     summary = "Buys sharp dips below the 20-bar mean and sells the bounce. Stands aside in turbulence."
     defaults = {"window": 20, "entry_z": 2.0, "exit_z": 0.0, "size": 0.35}
+    tunable = {"window": [14, 20, 30], "entry_z": [1.5, 2.0, 2.5]}
 
     def decide(self, s: Series, pos: PositionView, council: Consensus) -> Intent | None:
         z = ta.zscore(s.close, int(self.p["window"]))
@@ -59,6 +61,7 @@ class BreakoutHunter(Trader):
     persona = "Breaker"
     summary = "Buys new 40-bar highs, exits on a 15-bar low. Ignores the council except for risk warnings."
     defaults = {"entry": 40, "exit": 15, "size": 0.4}
+    tunable = {"entry": [20, 40, 60], "exit": [10, 15, 25]}
 
     def decide(self, s: Series, pos: PositionView, council: Consensus) -> Intent | None:
         n_in, n_out = int(self.p["entry"]), int(self.p["exit"])
@@ -78,6 +81,7 @@ class Accumulator(Trader):
     persona = "Stacker"
     summary = "Buys small slices on a schedule, larger ones when oversold. Takes profit at a fixed gain."
     defaults = {"every": 30, "slice": 0.08, "take_profit": 0.06}
+    tunable = {"every": [15, 30, 60], "take_profit": [0.04, 0.06, 0.1]}
 
     def __init__(self, params: dict[str, float] | None = None) -> None:
         super().__init__(params)
@@ -101,6 +105,7 @@ class CouncilFollower(Trader):
     persona = "Delegate"
     summary = "Has no indicators of its own. Trades only when the weighted vote of all analysts is strong."
     defaults = {"enter": 0.35, "leave": 0.0, "size": 0.4}
+    tunable = {"enter": [0.25, 0.35, 0.5], "leave": [-0.1, 0.0, 0.1]}
 
     def decide(self, s: Series, pos: PositionView, council: Consensus) -> Intent | None:
         if pos.flat and council.direction >= self.p["enter"] and council.risk_off < 0.5:

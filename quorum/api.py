@@ -6,22 +6,29 @@ must never be exposed to a network without the user deciding to.
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
-from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .auth import COOKIE, LOGIN_PAGE, MAX_AGE, OPEN_PATHS, Gate
 from .backtest import BacktestRunner
 from .bots import catalog
 from .bus import Bus
 from .connectors import VENUES
 from .engine import ConfigError, Engine
 from .lead import Lead
+from .notify import Notifier
+from .plugins import load_plugins
 from .risk import PROFILES
 from .security import Vault
 from .storage import Store
@@ -38,18 +45,34 @@ def _default_data_dir() -> Path:
 DATA = Path(os.environ.get("QUORUM_DATA") or _default_data_dir())
 
 
+def _default_strategies_dir() -> Path:
+    """`./strategies` in a checkout, `<data>/strategies` when installed with pip."""
+    repo = Path(__file__).resolve().parents[1]
+    return repo / "strategies" if (repo / "pyproject.toml").exists() else DATA / "strategies"
+
+
+STRATEGIES_DIR = Path(os.environ.get("QUORUM_STRATEGIES") or _default_strategies_dir())
+
+CSV_FIELDS = ["time_utc", "trader", "account", "market", "side", "quantity", "price", "value", "fee", "result", "reason"]
+
+
 def create_app() -> FastAPI:
+    plugins, plugin_errors = load_plugins(STRATEGIES_DIR)  # before the engine mounts bots that may use them
     bus = Bus(history=3000)
     store, vault = Store(DATA / "quorum.db"), Vault(DATA)
+    gate = Gate(DATA)
     engine = Engine(store, vault, bus)
     lead = Lead(engine, store, vault, bus)
+    notifier = Notifier(engine, lead, store, vault, bus)
     backtests = BacktestRunner(engine, bus)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         await engine.start()
         await lead.start()
+        await notifier.start()
         yield
+        await notifier.stop()
         await lead.stop()
         await engine.stop()
 
@@ -57,6 +80,10 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def revalidate_assets(request, call_next):
+        if gate.enabled and request.url.path not in OPEN_PATHS and not gate.allows(request.cookies.get(COOKIE)):
+            if request.url.path.startswith("/api/"):
+                return JSONResponse({"detail": "Sign in first"}, status_code=401)
+            return RedirectResponse("/login", status_code=303)
         # The dashboard ships with the package; after an update the browser must not run stale JS.
         response = await call_next(request)
         if request.url.path == "/" or request.url.path.startswith("/static/"):
@@ -79,9 +106,32 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, f"Not found: {exc}") from exc
 
+    @app.get("/login")
+    def login_page() -> HTMLResponse:
+        if not gate.enabled:
+            return RedirectResponse("/", status_code=303)
+        return HTMLResponse(LOGIN_PAGE.format(error=""))
+
+    @app.post("/login")
+    async def login(request: Request) -> Response:
+        attempt = parse_qs((await request.body()).decode())
+        if gate.enabled and await gate.check_password((attempt.get("password") or [""])[0]):
+            resp = RedirectResponse("/", status_code=303)
+            resp.set_cookie(COOKIE, gate.token(), max_age=MAX_AGE, httponly=True, samesite="strict",
+                            secure=request.url.scheme == "https")
+            return resp
+        return HTMLResponse(LOGIN_PAGE.format(error='<div class="hint bad">Wrong password.</div>'), status_code=401)
+
+    @app.get("/logout")
+    def logout() -> Response:
+        resp = RedirectResponse("/login" if gate.enabled else "/", status_code=303)
+        resp.delete_cookie(COOKIE)
+        return resp
+
     @app.get("/api/state")
     def state() -> dict:
-        return {**engine.overview(), "setup": lead.onboarding.summary()}
+        return {**engine.overview(), "setup": lead.onboarding.summary(), "auth": gate.enabled,
+                "plugins": {"loaded": plugins, "errors": plugin_errors, "folder": str(STRATEGIES_DIR)}}
 
     @app.post("/api/council")
     async def council(data: dict = Body(...)) -> dict:
@@ -194,11 +244,48 @@ def create_app() -> FastAPI:
 
     @app.get("/api/settings")
     def get_settings() -> dict:
-        return lead.settings()
+        return {**lead.settings(), "exchange_stops": engine.exchange_stops}
 
     @app.post("/api/settings")
-    def set_settings(data: dict = Body(...)) -> dict:
-        return lead.update_settings(data)
+    async def set_settings(data: dict = Body(...)) -> dict:
+        if "exchange_stops" in data:
+            await engine.set_exchange_stops(bool(data["exchange_stops"]))
+        return {**lead.update_settings(data), "exchange_stops": engine.exchange_stops}
+
+    @app.get("/api/notify")
+    def notify_settings() -> dict:
+        return notifier.settings()
+
+    @app.post("/api/notify")
+    async def update_notify(data: dict = Body(...)) -> dict:  # async: a new Telegram token starts the poller
+        return guard(notifier.update, data)
+
+    @app.post("/api/notify/test")
+    async def test_notify() -> dict:
+        try:
+            await aguard(notifier.send_now("Quorum is connected. You will hear from the team here."))
+        except RuntimeError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return {"ok": True}
+
+    @app.get("/api/export/trades.csv")
+    def export_trades(bot_id: str | None = None) -> Response:
+        """Every fill, oldest first, for spreadsheets and tax tools."""
+        names = {a.id: a.record["name"] for a in engine.accounts.values()}
+        out = io.StringIO()
+        writer = csv.DictWriter(out, CSV_FIELDS)
+        writer.writeheader()
+        for f in reversed(store.fills(bot_id, limit=1_000_000)):
+            account_id, symbol = f["instrument_key"].split(":", 1)
+            writer.writerow({
+                "time_utc": datetime.fromtimestamp(f["ts"] / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "trader": f.get("bot_name", f["bot_id"]), "account": names.get(account_id, account_id),
+                "market": symbol, "side": f["side"], "quantity": f"{f['qty']:.10g}", "price": f"{f['price']:.10g}",
+                "value": f"{f['qty'] * f['price']:.2f}", "fee": f"{f['fee']:.6f}", "result": f"{f.get('pnl', 0):.6f}",
+                "reason": f["reason"]})
+        stamp = datetime.now().strftime("%Y-%m-%d")
+        return Response(out.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="quorum-trades-{stamp}.csv"'})
 
     @app.get("/api/equity")
     def equity(bot_id: str = "__all__") -> list:
@@ -210,6 +297,9 @@ def create_app() -> FastAPI:
 
     @app.websocket("/ws")
     async def ws(sock: WebSocket) -> None:
+        if not gate.allows(sock.cookies.get(COOKIE)):
+            await sock.close(code=4401)
+            return
         await sock.accept()
         q = bus.stream()
         try:

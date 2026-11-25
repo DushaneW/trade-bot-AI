@@ -92,12 +92,15 @@ const LOOK = {
   trend: ["#5b9cf6", "diamond"], momentum: ["#f2b84b", "circle"], volatility: ["#f06a5d", "cloud"],
   breadth: ["#36c2b4", "squircle"], volume: ["#4fb0f5", "pill"], regime: ["#9b7bf0", "hex"],
   structure: ["#d98ad9", "squircle"], divergence: ["#e5c158", "diamond"], relative: ["#4cc38a", "cloud"],
+  correlation: ["#6fa8dc", "hex"], funding: ["#e07b9b", "pill"], open_interest: ["#c9a26b", "circle"],
+  order_book: ["#58c4a0", "diamond"],
   trend_rider: ["#7c8cf8", "squircle"], mean_reverter: ["#3fb7d9", "circle"], breakout: ["#f08a4b", "hex"],
   accumulator: ["#5cc47a", "pill"], council: ["#c88af0", "cloud"],
 };
 const ROLE = {
   trend: "Trend", momentum: "Momentum", volatility: "Risk", breadth: "Macro", volume: "Flow", regime: "Regime",
-  structure: "Levels", divergence: "Signals", relative: "Ranking",
+  structure: "Levels", divergence: "Signals", relative: "Ranking", correlation: "Pairs", funding: "Futures",
+  open_interest: "Positioning", order_book: "Order book",
   trend_rider: "Trader", mean_reverter: "Trader", breakout: "Trader", accumulator: "Trader", council: "Trader",
 };
 const SHAPE = {
@@ -845,7 +848,7 @@ const views = {
         <div class="actions">
           ${trader ? `<span class="chip" title="Risk profile">${esc(profileLabel(b.profile))}</span>` : ""}
           <button class="btn" data-act="toggle">${running ? "Pause" : "Resume"}</button>
-          ${trader ? `<button class="btn" data-act="limits">Budget & limits</button><a class="btn" href="#/backtest?bot=${id}">Backtest</a>` : ""}
+          ${trader ? `<button class="btn" data-act="limits">Budget & limits</button><a class="btn" href="#/backtest?bot=${id}">Backtest</a><a class="btn" href="/api/export/trades.csv?bot_id=${id}" download>Export trades</a>` : ""}
           ${trader && Object.keys(b.positions ?? {}).length ? `<button class="btn" data-act="flatten">Close positions</button>` : ""}
           <button class="btn danger" data-act="delete">Delete</button>
         </div>`;
@@ -894,7 +897,7 @@ const views = {
       return `<div class="card open"><div class="card-head">Equity<span class="meta">${fmt.money(b.equity)} of ${fmt.money(b.budget)}</span></div>
           <div class="card-body"><div><div class="item" style="grid-template-columns:1fr">${chart(detail.equity_curve, b.budget)}</div></div></div></div>
         ${pos.length ? `<div class="card open"><div class="card-head">Open positions<span class="meta">${pos.length}</span></div><div class="card-body"><div>
-          ${pos.map(([k, p]) => { const u = (p.price - p.avg_price) * p.qty; return `<div class="item"><span class="st ok"></span><div><b>${esc(sym(k))}</b><div class="sub"><span>${fmt.qty(p.qty)} at ${fmt.price(p.avg_price)}, now ${fmt.price(p.price)}</span></div></div><span class="${fmt.tone(u)}">${fmt.signed(u)}</span></div>`; }).join("")}
+          ${pos.map(([k, p]) => { const u = (p.price - p.avg_price) * p.qty; return `<div class="item"><span class="st ok"></span><div><b>${esc(sym(k))}</b><div class="sub"><span>${fmt.qty(p.qty)} at ${fmt.price(p.avg_price)}, now ${fmt.price(p.price)}</span>${p.stop_price ? `<span title="Resting on the exchange, so it works while this computer is off">Exchange stop at ${fmt.price(p.stop_price)}</span>` : ""}</div></div><span class="${fmt.tone(u)}">${fmt.signed(u)}</span></div>`; }).join("")}
         </div></div></div>` : ""}`;
     };
     const renderThread = () => {
@@ -1154,6 +1157,7 @@ const views = {
       account: fromBot?.account_id ?? accs[0]?.id,
       symbols: new Set(fromBot?.symbols ?? account(accs[0]?.id)?.symbols.slice(0, 2) ?? []),
       bars: local.get("btBars", 2000),
+      walk: local.get("btWalk", false),
       budget: fromBot?.budget ?? 100,
       profile: fromBot?.profile ?? "balanced",
       params: fromBot?.params, limits: fromBot?.limits, bot_id: fromBot?.id,
@@ -1181,6 +1185,7 @@ const views = {
         <div class="field"><span>Markets</span><div class="toggles">${(acc?.symbols ?? []).map((s) => `<button type="button" data-sym="${esc(s)}" class="${form.symbols.has(s) ? "on" : ""}">${esc(s)}</button>`).join("")}</div></div>
         <div class="field"><span>History length</span><div class="seg">${[500, 1000, 2000, 5000].map((b) => `<button type="button" data-bars="${b}" class="${b === form.bars ? "on" : ""}">${b.toLocaleString("en-US")} bars</button>`).join("")}</div>
           <small>Bars use the account's timeframe. Longer history is slower but far more meaningful.</small></div>
+        <label class="check"><input type="checkbox" name="walk" ${form.walk ? "checked" : ""}><span><b>Walk-forward test</b><small>Splits the history into five stretches. The trader's settings are tuned on one stretch and traded, unchanged, on the next one it has never seen. Only those unseen stretches count. Needs 1,000 bars or more.</small></span></label>
         ${fromBot ? `<div class="hint">Using ${esc(fromBot.name)}'s settings, budget and risk limits.</div>` : ""}
         <div><button class="btn primary" type="submit">Run backtest</button></div>
       </form>`;
@@ -1190,12 +1195,14 @@ const views = {
       $$("[data-profile]", el).forEach((b) => b.addEventListener("click", () => { form.profile = b.dataset.profile; form.limits = undefined; renderForm(); }));
       $("select[name=account]", el).addEventListener("change", (e) => { form.account = e.target.value; form.symbols.clear(); renderForm(); });
       $("input[name=budget]", el).addEventListener("change", (e) => { form.budget = Number(e.target.value); });
+      $("input[name=walk]", el).addEventListener("change", (e) => { form.walk = e.target.checked; local.set("btWalk", form.walk); });
       $("#bt", el).addEventListener("submit", async (e) => {
         e.preventDefault();
         try {
           const run = await api("/api/backtests", { method: "POST", body: {
             strategy: form.strategy, account_id: form.account, symbols: [...form.symbols], bars: form.bars,
-            budget: form.budget, profile: form.profile, params: form.params, limits: form.limits, bot_id: form.bot_id } });
+            budget: form.budget, profile: form.profile, params: form.params, limits: form.limits, bot_id: form.bot_id,
+            walk_forward: form.walk } });
           runs.unshift(run);
           renderRun(run);
           renderPast();
@@ -1208,7 +1215,7 @@ const views = {
       if (!run || run.status === "done") { box.innerHTML = ""; return; }
       if (run.status === "failed") { box.innerHTML = `<div class="hint bad">Backtest failed: ${esc(run.error)}</div>`; return; }
       const label = run.status === "loading" ? "Loading history…" : run.status === "queued" ? "Waiting for the previous run…"
-        : `Replaying ${run.bars.toLocaleString("en-US")} bars · ${Math.round(run.progress * 100)}%`;
+        : `${run.walk_forward ? "Walk-forward over" : "Replaying"} ${run.bars.toLocaleString("en-US")} bars · ${Math.round(run.progress * 100)}%`;
       box.innerHTML = `<div class="card open waiting"><div class="card-head"><span class="st run"></span>${esc(run.persona)} on ${run.symbols.map(esc).join(", ")}<span class="meta">${label}</span></div>
         <div class="card-body"><div><div class="item" style="grid-template-columns:1fr"><div class="bar"><span style="width:${Math.round(run.progress * 100)}%"></span></div></div></div></div></div>`;
     };
@@ -1228,6 +1235,14 @@ const views = {
         ["In the market", `${Math.round(r.exposure * 100)}%`, `Fees paid ${fmt.money(r.fees)}`],
       ];
       const analysts = [...r.analysts].sort((a, b) => b.accuracy - a.accuracy);
+      const wf = r.walk_forward;
+      const day = (ts) => new Date(ts).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      const setting = (p) => Object.entries(p).map(([k, v]) => `${esc(k)} ${v}`).join(", ") || "defaults";
+      const wfHtml = !wf ? "" : `
+        <div class="hint ${wf.out_of_sample < wf.in_sample / 2 ? "bad" : ""}" style="margin-bottom:12px">Tuned settings earned ${fmt.pct(wf.in_sample)} on average where they were picked and ${fmt.pct(wf.out_of_sample)} on the next stretch they had never seen. ${wf.out_of_sample < wf.in_sample / 2 ? "Most of the edge disappears out of sample: the tuning mostly fits noise." : "The edge holds up reasonably out of sample. Still only one history."} ${wf.settings_tried} setting${wf.settings_tried === 1 ? "" : "s"} tried per stretch${wf.tunable.length ? ` (${wf.tunable.map(esc).join(", ")})` : "; this trader has nothing to tune"}.</div>
+        <div class="card open" style="margin-bottom:12px"><div class="card-head">Unseen stretches<span class="meta">tuned · defaults · hold</span></div><div class="card-body"><div>
+          ${wf.folds.map((f, i) => `<div class="item fold"><span class="st ${f.test_return > 0 ? "ok" : f.test_return < 0 ? "fail" : "idle"}"></span><div style="min-width:0"><b>Stretch ${i + 1}</b> <span class="muted">${day(f.test_start)} to ${day(f.test_end)}</span><div class="sub"><span>Picked ${setting(f.params)} (${fmt.pct(f.train_return)} while tuning)</span></div></div><span><span class="${fmt.tone(f.test_return)}">${fmt.pct(f.test_return)}</span> <span class="muted">· ${fmt.pct(f.default_return)} · ${fmt.pct(f.test_buy_hold)}</span></span></div>`).join("")}
+        </div></div></div>`;
       box.innerHTML = `
         <div class="section-title">${esc(r.persona)} · ${esc(r.title)} on ${r.symbols.map(esc).join(", ")}
           <span class="muted" style="font-weight:400"> · ${r.bars.toLocaleString("en-US")} bars, ${span >= 1 ? `${span.toFixed(1)} days` : `${(span * 24).toFixed(1)} hours`}, ran in ${r.seconds}s</span></div>
@@ -1235,7 +1250,8 @@ const views = {
           ? `Beat buy-and-hold by ${fmt.pct(beat).replace("+", "")} on this stretch of history.`
           : `Did ${fmt.pct(beat).replace("−", "")} worse than simply buying and holding. That is common; most strategies lose to holding in a strong trend.`}
           ${r.paused ? ` The risk manager paused it: ${esc(r.paused)}.` : ""}</div>
-        <div class="figures" style="padding:0;margin:0;grid-template-columns:repeat(3,minmax(0,1fr))">${figs.map(([k, v, s]) => `<div class="fig"><small>${k}</small><b>${v}</b><small>${s}</small></div>`).join("")}</div>
+        ${wfHtml}
+        <div class="figures figs3" style="padding:0;margin:0">${figs.map(([k, v, s]) => `<div class="fig"><small>${k}</small><b>${v}</b><small>${s}</small></div>`).join("")}</div>
         <div class="card open" style="margin-top:12px"><div class="card-head">Equity<span class="meta"><span class="key k1"></span>strategy <span class="key k2"></span>buy and hold</span></div>
           <div class="card-body"><div><div class="item" style="grid-template-columns:1fr">${compareChart(r.equity_curve, r.hold_curve, r.budget)}</div></div></div></div>
         <div class="two" style="margin-top:12px;align-items:start">
@@ -1260,7 +1276,7 @@ const views = {
       const done = runs.filter((r) => r.status === "done" || r.status === "failed");
       $("#btPast", el).innerHTML = done.length ? `<div class="section-title">Earlier runs</div><div class="list">${done.map((r) => `
         <div class="list-row" data-run="${r.id}" style="cursor:pointer;${r.id === selected ? "background:var(--raised)" : ""}">
-          <div><b>${esc(r.persona)}</b> <span class="muted">· ${esc(r.title)} · ${r.symbols.map(esc).join(", ")} · ${r.bars.toLocaleString("en-US")} bars</span>
+          <div><b>${esc(r.persona)}</b> <span class="muted">· ${esc(r.title)} · ${r.symbols.map(esc).join(", ")} · ${r.bars.toLocaleString("en-US")} bars${r.walk_forward ? " · walk-forward" : ""}</span>
             <small>${r.status === "failed" ? `Failed: ${esc(r.error)}` : `Buy and hold ${fmt.pct(r.summary.buy_hold_return)} · drawdown ${fmt.pct(r.summary.max_drawdown)} · ${r.summary.trades} fills`}</small></div>
           <span class="${r.status === "done" ? fmt.tone(r.summary.return) : "down"}">${r.status === "done" ? fmt.pct(r.summary.return) : "failed"}</span></div>`).join("")}</div>` : "";
       $$("[data-run]", el).forEach((row) => row.addEventListener("click", async () => {
@@ -1291,8 +1307,31 @@ const views = {
 
   async settings(el) {
     let s = await api("/api/settings");
+    let n = await api("/api/notify");
     const render = () => {
-      el.innerHTML = `<div class="page"><h1>Settings</h1><p>How the Chair talks to you.</p>
+      const plugins = state.overview.plugins ?? { loaded: [], errors: [] };
+      el.innerHTML = `<div class="page"><h1>Settings</h1><p>Protection, notifications and how the Chair talks to you.</p>
+        <div class="section-title">Protection</div>
+        <div class="form">
+          <label class="check"><input type="checkbox" id="exStops" ${s.exchange_stops ? "checked" : ""}><span><b>Backup stop on the exchange</b><small>After every buy, a stop order rests on the exchange just past the trader's own stop loss. If this computer sleeps or loses its connection, the exchange still closes the position. On Binance it is a stop-limit order with 1% room to fill.</small></span></label>
+        </div>
+
+        <div class="section-title">Phone notifications</div>
+        <form class="form" id="nt">
+          <div class="hint">Telegram can also take commands: <code>/status</code>, <code>/start</code>, <code>/stop</code> and <code>/stop close</code>. Create a bot by messaging <b>@BotFather</b> on Telegram, send it <code>/newbot</code>, and paste the token it gives you.</div>
+          <label class="field"><span>Telegram bot token</span><input class="input" name="telegram_token" type="password" autocomplete="off" placeholder="${n.telegram.configured ? `Saved (${esc(n.telegram.hint)})` : "123456789:AA…"}"></label>
+          ${n.telegram.configured ? (n.telegram.paired
+            ? `<div class="hint ok">Paired with your Telegram chat. Only that chat can give commands.</div>`
+            : `<div class="hint">Now open your bot in Telegram and send <code>/pair ${esc(n.telegram.pair_code)}</code>. Until then nobody can use it.</div>`) : ""}
+          <label class="field"><span>Discord webhook (optional)</span><input class="input" name="discord_webhook" type="password" autocomplete="off" placeholder="${n.discord.configured ? "Saved" : "https://discord.com/api/webhooks/…"}"><small>Channel settings, Integrations, Webhooks, New webhook, Copy URL. Discord only receives messages.</small></label>
+          <div class="field"><span>Tell me about</span><div class="toggles">${Object.entries(n.event_labels).map(([k, label]) => `<button type="button" data-ev="${k}" class="${n.events[k] ? "on" : ""}">${esc(label)}</button>`).join("")}</div></div>
+          <label class="field" style="max-width:240px"><span>Daily summary at (hour)</span><input class="input num" name="summary_hour" type="number" min="0" max="23" step="1" value="${n.summary_hour}"><small>Uses this computer's clock.</small></label>
+          ${n.last_error ? `<div class="hint bad">Last delivery failed: ${esc(n.last_error)}</div>` : ""}
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="ntTest">Send a test</button>
+            ${n.telegram.configured ? `<button class="btn danger" type="button" id="ntClearTg">Remove Telegram</button>` : ""}${n.discord.configured ? `<button class="btn danger" type="button" id="ntClearDc">Remove Discord</button>` : ""}</div>
+        </form>
+
+        <div class="section-title">The Chair</div>
         <form class="form" id="st">
           <div class="hint">Without a key the Chair answers from rules: instant, free and offline. With an Anthropic API key it writes its answers with Claude, from the same facts.</div>
           <label class="field"><span>Anthropic API key</span><input class="input" name="claude_key" type="password" autocomplete="off" placeholder="${s.claude.configured ? `Saved (${esc(s.claude.key_hint)})` : "sk-ant-…"}"><small>Encrypted on this computer. Usage is billed to this key.</small></label>
@@ -1300,7 +1339,43 @@ const views = {
           <label class="field" style="max-width:240px"><span>Briefing every (minutes)</span><input class="input num" name="briefing_minutes" type="number" min="1" step="1" value="${s.briefing_minutes}"><small>The Chair stays quiet when nothing changed.</small></label>
           <div class="hint">With a key set, each question sends the market votes, analyst readings and bot results to Anthropic. Exchange keys and account details are never sent.</div>
           <div style="display:flex;gap:8px"><button class="btn primary" type="submit">Save</button>${s.claude.configured ? `<button class="btn danger" type="button" id="clearKey">Remove key</button>` : ""}</div>
-        </form></div>`;
+        </form>
+
+        <div class="section-title">Your data</div>
+        <div class="form">
+          <div class="hint">Every buy and sell with time, price, fee and result, ready for a spreadsheet or a tax tool.</div>
+          <div><a class="btn" href="/api/export/trades.csv" download>Export all trades (CSV)</a></div>
+        </div>
+
+        <div class="section-title">Strategy plugins</div>
+        <div class="form">
+          <div class="hint">Drop a <code>.py</code> file with your own analyst or trader into <code>${esc(plugins.folder ?? "strategies")}</code> and restart. Start from <code>_example_analyst.py</code> in that folder. Plugins run with full access to this computer: only use files you have read.</div>
+          ${plugins.loaded.length ? `<div class="hint ok">Loaded: ${plugins.loaded.map(esc).join(", ")}</div>` : `<small class="muted">No plugins loaded.</small>`}
+          ${plugins.errors.map((e) => `<div class="hint bad">${esc(e)}</div>`).join("")}
+          ${state.overview.skipped_bots?.length ? `<div class="hint bad">Not loaded because their plugin file is missing: ${state.overview.skipped_bots.map(esc).join(", ")}</div>` : ""}
+        </div>
+        ${state.overview.auth ? `<div style="margin-top:24px"><a class="btn" href="/logout">Sign out</a></div>` : ""}
+      </div>`;
+      $("#exStops", el).addEventListener("change", async (e) => {
+        try {
+          s = await api("/api/settings", { method: "POST", body: { exchange_stops: e.target.checked } });
+          toast(s.exchange_stops ? "Backup stops on. Open positions get one within a minute." : "Backup stops off. Resting stops were cancelled.");
+        } catch (err) { toast(err.message, true); e.target.checked = !e.target.checked; }
+      });
+      $$("[data-ev]", el).forEach((b) => b.addEventListener("click", () => { n.events[b.dataset.ev] = !n.events[b.dataset.ev]; b.classList.toggle("on"); }));
+      $("#nt", el).addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const f = new FormData(e.target);
+        const body = { events: n.events, summary_hour: Number(f.get("summary_hour")) };
+        if (f.get("telegram_token")) body.telegram_token = f.get("telegram_token");
+        if (f.get("discord_webhook")) body.discord_webhook = f.get("discord_webhook");
+        try { n = await api("/api/notify", { method: "POST", body }); toast("Saved"); render(); } catch (err) { toast(err.message, true); }
+      });
+      $("#ntTest", el).addEventListener("click", async () => {
+        try { await api("/api/notify/test", { method: "POST" }); toast("Test message sent"); } catch (err) { toast(err.message, true); }
+      });
+      $("#ntClearTg", el)?.addEventListener("click", async () => { n = await api("/api/notify", { method: "POST", body: { telegram_token: "" } }); toast("Telegram removed"); render(); });
+      $("#ntClearDc", el)?.addEventListener("click", async () => { n = await api("/api/notify", { method: "POST", body: { discord_webhook: "" } }); toast("Discord removed"); render(); });
       $("#st", el).addEventListener("submit", async (e) => {
         e.preventDefault();
         const f = new FormData(e.target);

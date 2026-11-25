@@ -5,8 +5,8 @@
 # Quorum
 
 **A trading bot that works like a small team.**<br>
-Nine analysts watch the market, five traders act on budgets you set,
-and a lead called the Chair keeps you in the loop.
+Thirteen analysts watch the market, five traders act on budgets you set,
+and a lead called the Chair keeps you in the loop, on your screen or your phone.
 
 <br>
 
@@ -14,9 +14,10 @@ and a lead called the Chair keeps you in the loop.
 ![macOS](https://img.shields.io/badge/macOS-supported-555?style=flat-square&logo=apple&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-supported-0078D6?style=flat-square&logo=windows&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-supported-f0883e?style=flat-square&logo=linux&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-4cc38a?style=flat-square)
 
-[Install](#install) &nbsp;·&nbsp; [First run](#the-first-five-minutes) &nbsp;·&nbsp; [How it works](#how-it-works) &nbsp;·&nbsp; [Safety](#keeping-your-money-safe) &nbsp;·&nbsp; [Backtesting](#testing-ideas-on-old-data) &nbsp;·&nbsp; [FAQ](#questions-people-ask)
+[Install](#install) &nbsp;·&nbsp; [First run](#the-first-five-minutes) &nbsp;·&nbsp; [How it works](#how-it-works) &nbsp;·&nbsp; [Safety](#keeping-your-money-safe) &nbsp;·&nbsp; [Backtesting](#testing-ideas-on-old-data) &nbsp;·&nbsp; [Phone](#on-your-phone) &nbsp;·&nbsp; [24/7](#running-it-around-the-clock) &nbsp;·&nbsp; [FAQ](#questions-people-ask)
 
 </div>
 
@@ -39,7 +40,7 @@ It runs on your own computer, your keys stay encrypted on your machine, and noth
 <br>
 
 <div align="center">
-<img src="docs/team.svg" width="720" alt="The Chair, nine analysts and five traders">
+<img src="docs/team.svg" width="720" alt="The Chair, the analysts and five traders">
 </div>
 
 <br>
@@ -48,10 +49,10 @@ It runs on your own computer, your keys stay encrypted on your machine, and noth
 <tr>
 <td width="33%" valign="top">
 
-**9 analysts**
+**13 analysts**
 
-Trend, momentum, volatility, volume, support and resistance and more. They never trade. They just say
-what they see, and get scored on it.
+Trend, momentum, volatility, volume, support and resistance, futures funding, the order book and more.
+They never trade. They just say what they see, and get scored on it.
 
 </td>
 <td width="33%" valign="top">
@@ -121,7 +122,7 @@ All the launchers accept the same options:
 | --- | --- |
 | `--port 9000` | Use another port. The default is `8420`. |
 | `--no-browser` | Don't open the browser automatically. |
-| `--host 0.0.0.0` | Listen on your network. Only do this behind your own login. |
+| `--host 0.0.0.0` | Listen on your network. Quorum refuses unless `QUORUM_PASSWORD` is set. |
 
 The dashboard lives at `http://127.0.0.1:8420`.
 
@@ -160,7 +161,7 @@ your positions (their stop losses keep working) or close everything.
 
 ```mermaid
 flowchart LR
-    M[(Your exchange)] -- prices --> A[9 analysts]
+    M[(Your exchange)] -- prices, funding, order book --> A[13 analysts]
     A -- opinions --> C{{Weighted vote}}
     C --> T[5 traders]
     T -- orders --> R[Risk checks]
@@ -188,6 +189,11 @@ Vector also reads two charts at once, the one you trade and one twelve times lon
 both agree. And traders size their entries by how united the team is: a split vote means a smaller position,
 a unanimous one a slightly bigger one.
 
+On crypto, three analysts look past the chart. **Carry** reads the futures funding rate: when longs pay a lot to
+stay in, the trade is crowded and tends to unwind. **Crowd** compares open interest with the price move, which
+tells new money apart from short covering. **Depth** weighs buy orders against sell orders near the price. Order
+books can be faked, so Depth speaks softly and the scoring decides how much it is worth.
+
 You can see all of this on each analyst's page under *Where to trust*.
 
 <br>
@@ -211,6 +217,12 @@ You can see all of this on each analyst's page under *Where to trust*.
 | **Mason** | Support and resistance |
 | **Contra** | Price and momentum disagreeing |
 | **Ranker** | Which market is strongest |
+| **Link** | Markets that move together, and which one lags |
+| **Carry** | Futures funding: who is crowded |
+| **Crowd** | Open interest behind the move |
+| **Depth** | Buy and sell orders near the price |
+
+Carry, Crowd and Depth join crypto teams only.
 
 </td>
 <td width="50%" valign="top">
@@ -250,6 +262,17 @@ The risk profile sets them for you:
 
 You can fine-tune any of them on the trader's page.
 
+**Stops that work while your computer is off.** After every buy, Quorum also places a stop order on the
+exchange itself, half a percent past the trader's own stop loss. Normally the trader's stop acts first and
+the backup is cancelled. If your laptop sleeps or the internet drops, the exchange closes the position anyway,
+and Quorum books that sale the next time it starts. On Binance this is a stop-limit order with 1% room to fill,
+because Binance spot has no plain stop-market order. You can turn it off in Settings.
+
+**One bet is one bet.** BTC, ETH and SOL often move together, so holding all three is close to one big position.
+Quorum measures how closely your markets move together, and when a trader already holds markets that move like the
+one it wants to buy, the new position is trimmed. The cap is 50%, 80% or 140% of the trader's money in
+look-alike markets, depending on the risk profile.
+
 And a few rules that can't be switched off:
 
 - Nothing runs before you press Start.
@@ -275,6 +298,17 @@ see the result next to simply buying and holding, which is the number most strat
 A good backtest means "this idea isn't obviously broken". Try anything promising on a testnet account before
 giving it real money.
 
+### Walk-forward
+
+<img src="docs/walkforward.png" width="100%" alt="A walk-forward test with four unseen stretches">
+
+Tick *Walk-forward test* and Quorum splits the history into five stretches. It tries nine settings for the
+trader on the first stretch, keeps the best, and trades the second stretch with them, unchanged. Then it rolls
+forward. Only the stretches the settings had never seen count toward the result.
+
+If tuned settings earned 10% where they were picked and 1% on the next stretch, the tuning was fitting noise,
+and the page says so. Each stretch also shows what the default settings and plain holding would have done.
+
 <br>
 
 ## Talking to the Chair
@@ -292,6 +326,57 @@ Nothing happens unless you click it.
 
 <br>
 
+## On your phone
+
+<img src="docs/notify.png" width="100%" alt="Telegram and Discord settings">
+
+Connect Telegram in **Settings** and the team writes to you: every buy and sell, stop losses, a trader pausing,
+orders that fail and a short summary each evening. You choose which.
+
+It also takes commands. `/status` shows how the team is doing, `/start` and `/stop` work like the button in
+the dashboard, and `/stop close` stops and sells everything.
+
+1. In Telegram, message **@BotFather**, send `/newbot` and follow the two questions.
+2. Paste the token it gives you into Settings.
+3. Open your new bot and send it the pairing code Settings shows, like `/pair 482913`.
+
+From then on only your chat can give commands; anyone else who finds the bot is ignored. Discord works too,
+through a channel webhook, but only for messages, since webhooks can't read replies.
+
+The dashboard itself also works on a phone, with the sections in a bar at the bottom.
+
+<br>
+
+## Running it around the clock
+
+A team on a laptop trades only while the laptop is awake. To keep it going, run Quorum on something that stays
+on: an old PC, a Raspberry Pi 4 or 5, or a small VPS for a few dollars a month.
+
+With Docker:
+
+```bash
+git clone https://github.com/DushaneW/trade-bot-AI.git quorum && cd quorum
+echo "QUORUM_PASSWORD=pick-a-long-one" > .env
+docker compose up -d
+```
+
+It restarts by itself after a crash or a reboot, and keeps its data in `./data` next to the compose file.
+The dashboard asks for that password.
+
+By default the port only listens on the machine itself. From your own computer, reach it through an SSH tunnel:
+
+```bash
+ssh -L 8420:127.0.0.1:8420 you@your-server
+```
+
+and open `http://127.0.0.1:8420`. If you'd rather expose it, put it behind a reverse proxy with HTTPS (Caddy
+does this in two lines) and never on plain HTTP.
+
+Without Docker, `QUORUM_PASSWORD=... ./start.sh --host 0.0.0.0 --no-browser` does the same; Quorum refuses to
+listen on the network without a password.
+
+<br>
+
 ## Where you can trade
 
 | | Exchanges and brokers | Practice accounts |
@@ -300,6 +385,9 @@ Nothing happens unless you click it.
 | **US stocks** | Alpaca | Free practice accounts |
 | **Forex** | OANDA | Free practice accounts |
 
+Backup stops on the exchange work on all of them. Funding and open interest need the exchange to list a
+perpetual future for the pair; where it doesn't, Carry and Crowd stay quiet.
+
 <br>
 
 ## Your data
@@ -307,6 +395,9 @@ Nothing happens unless you click it.
 Everything lives in a `data` folder inside the project. It holds the database and `secret.key`, which unlocks
 your saved API keys. **Back it up and never share or commit it.** It's already in `.gitignore`. To keep it
 somewhere else, set the `QUORUM_DATA` environment variable.
+
+**Settings → Export all trades** downloads every buy and sell as a CSV file with time, price, fee and result,
+ready for a spreadsheet or a tax tool. Each trader's page has its own export too.
 
 <br>
 
@@ -320,6 +411,8 @@ quorum/
 ├── install.sh · install.command · install.bat     installers
 ├── start.sh · Start Quorum.command · Start Quorum.bat
 ├── run.py                 start it without the launchers
+├── Dockerfile · docker-compose.yml
+├── strategies/            your own analysts and traders
 └── quorum/
     ├── engine.py          prices → analysts → vote → traders → risk → orders
     ├── lead.py            the Chair
@@ -327,14 +420,21 @@ quorum/
     ├── learning.py        how analysts get scored
     ├── risk.py            all the limits
     ├── ledger.py          each trader's money and positions
-    ├── backtest.py        replaying history
+    ├── backtest.py        replaying history, walk-forward
+    ├── notify.py          Telegram and Discord
+    ├── plugins.py         loads strategies/
     ├── bots/              analysts and traders
     ├── connectors/        exchanges and brokers
     └── web/               the dashboard
 ```
 
-Want your own analyst or trader? Write one class in `quorum/bots/` and register it. It shows up in the
-dashboard and in backtests by itself. New exchange? Implement the four methods in `quorum/connectors/base.py`.
+**Your own analyst or trader** goes in the `strategies` folder, no changes to Quorum needed. Copy
+`strategies/_example_analyst.py` to a name without the underscore, edit it and restart. A new analyst joins
+every existing team and gets scored like the others, so a bad idea simply loses its vote. A new trader appears
+in the hiring menu and in backtests. Settings lists what loaded and any file that failed. Plugins are plain
+Python with full access to your computer, so only use files you have read.
+
+New exchange? Implement the methods in `quorum/connectors/base.py`.
 
 <br>
 
@@ -359,15 +459,16 @@ withdraw, Quorum won't use it. Alpaca and OANDA trading keys can't move money ou
 <details>
 <summary><b>Does my computer have to stay on?</b></summary>
 <br>
-Yes. The team only works while Quorum is running, and stop losses are handled by Quorum rather than placed on
-the exchange. If your laptop sleeps, so does your team. For anything serious, use a machine that stays on.
+The team only analyses and trades while Quorum runs. Your open positions are safer than that, though: each one
+has a backup stop resting on the exchange, which closes it even if your computer is off. To keep the team
+itself working, see [Running it around the clock](#running-it-around-the-clock).
 </details>
 
 <details>
 <summary><b>Does it send my data anywhere?</b></summary>
 <br>
-Only to the exchanges you connect, and to Anthropic if you turn on the Claude option and ask the Chair a
-question. There's no tracking.
+Only to the exchanges you connect, to Anthropic if you turn on the Claude option and ask the Chair a
+question, and to Telegram or Discord if you connect them. There's no tracking.
 </details>
 
 <br>

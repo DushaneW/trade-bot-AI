@@ -10,6 +10,8 @@ from dataclasses import dataclass, asdict
 from .ledger import Ledger
 from .models import Market, Side
 
+CORRELATED = 0.5  # return correlation from which two markets count as one bet for position limits
+
 
 @dataclass
 class RiskLimits:
@@ -19,6 +21,7 @@ class RiskLimits:
     max_drawdown_pct: float = 0.3   # bot pauses when equity falls this far below budget
     daily_loss_pct: float = 0.1     # bot pauses for the day after losing this much
     min_order_value: float = 5.0    # exchanges reject dust orders
+    max_correlated_pct: float = 0.8  # this market plus look-alike markets, as a share of equity
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -32,13 +35,15 @@ class RiskLimits:
 PROFILES: dict[str, dict] = {
     "careful": {"label": "Careful", "size": 0.7,
                 "hint": "Small positions, 3% stop loss, pauses after a 20% drawdown.",
-                "limits": RiskLimits(max_position_pct=0.35, stop_loss_pct=0.03, max_drawdown_pct=0.2, daily_loss_pct=0.06)},
+                "limits": RiskLimits(max_position_pct=0.35, stop_loss_pct=0.03, max_drawdown_pct=0.2,
+                                     daily_loss_pct=0.06, max_correlated_pct=0.5)},
     "balanced": {"label": "Balanced", "size": 1.0,
                  "hint": "The defaults: 4% stop loss, half the budget per market at most.",
                  "limits": RiskLimits()},
     "bold": {"label": "Bold", "size": 1.3,
              "hint": "Bigger positions, 6% stop loss, pauses after a 40% drawdown.",
-             "limits": RiskLimits(max_position_pct=0.8, stop_loss_pct=0.06, max_drawdown_pct=0.4, daily_loss_pct=0.15)},
+             "limits": RiskLimits(max_position_pct=0.8, stop_loss_pct=0.06, max_drawdown_pct=0.4,
+                                  daily_loss_pct=0.15, max_correlated_pct=1.4)},
 }
 
 
@@ -90,7 +95,9 @@ class RiskManager:
         return None
 
     def review(self, ledger: Ledger, limits: RiskLimits, market: Market,
-               key: str, side: Side, qty: float, price: float, equity: float) -> Verdict:
+               key: str, side: Side, qty: float, price: float, equity: float,
+               correlated: float = 0.0) -> Verdict:
+        """`correlated`: money already in other markets that move with this one, weighted by correlation."""
         if self.halted:
             return Verdict(0, "Kill switch is on")
         if qty <= 0 or price <= 0:
@@ -110,6 +117,13 @@ class RiskManager:
         if qty * price > room:
             qty = max(room, 0) / price
             reason = "Reduced to the position size limit"
+        if correlated > 0:
+            # BTC, ETH and SOL often move as one: three positions there are one big bet.
+            shared = equity * limits.max_correlated_pct - ledger.exposure(key, price) - correlated
+            if qty * price > shared:
+                qty = max(shared, 0) / price
+                room = min(room, max(shared, 0))
+                reason = "Reduced: the trader already holds markets that move with this one"
         if side == Side.BUY and qty * price * 1.002 > ledger.cash:
             qty = max(ledger.cash / 1.002, 0) / price
             reason = "Reduced to available budget"

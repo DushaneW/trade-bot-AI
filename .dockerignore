@@ -1,0 +1,10 @@
+.git
+.venv
+data
+docs
+strategies
+**/__pycache__
+*.egg-info
+build
+dist
+.claude

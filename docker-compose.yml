@@ -1,0 +1,20 @@
+# docker compose up -d
+#
+# Set a password first. On a server, anyone who reaches the port could trade with your money:
+#   echo "QUORUM_PASSWORD=pick-a-long-one" > .env
+services:
+  quorum:
+    build: .
+    image: quorum-council
+    container_name: quorum
+    restart: unless-stopped
+    environment:
+      QUORUM_PASSWORD: ${QUORUM_PASSWORD:?Set QUORUM_PASSWORD in .env first}
+      TZ: ${TZ:-UTC}
+    ports:
+      # Reachable from this machine only. For access from elsewhere, use an SSH tunnel or a reverse
+      # proxy with HTTPS, or change this to "8420:8420" if you know your firewall.
+      - "127.0.0.1:8420:8420"
+    volumes:
+      - ./data:/data
+      - ./strategies:/strategies:ro
