@@ -1,0 +1,5 @@
+# Same line endings on every platform, except Windows batch files which need CRLF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary

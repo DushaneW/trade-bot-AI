@@ -1,0 +1,9 @@
+# Local state: database, encrypted keys and the key that decrypts them.
+data/
+__pycache__/
+*.pyc
+.venv/
+.claude/
+build/
+dist/
+*.egg-info/
