@@ -350,7 +350,7 @@ The dashboard itself also works on a phone, with the sections in a bar at the bo
 ## Running it around the clock
 
 A team on a laptop trades only while the laptop is awake. To keep it going, run Quorum on something that stays
-on: an old PC, a Raspberry Pi 4 or 5, or a small VPS for a few dollars a month.
+on: an old PC, a Raspberry Pi 4 or 5 with a 64-bit system, or a small VPS for a few dollars a month.
 
 With Docker:
 
@@ -360,8 +360,17 @@ echo "QUORUM_PASSWORD=pick-a-long-one" > .env
 docker compose up -d
 ```
 
-It restarts by itself after a crash or a reboot, and keeps its data in `./data` next to the compose file.
-The dashboard asks for that password.
+The first build takes a minute or two. After that Quorum restarts by itself after a crash or a reboot, and
+keeps its data in `./data` next to the compose file. The dashboard asks for that password.
+
+| | |
+| --- | --- |
+| `docker compose logs -f` | Watch what the team is doing |
+| `docker compose down` | Stop it (backup stops on the exchange stay in place) |
+| `git pull && docker compose up -d --build` | Update to the latest version, data included |
+
+On Windows and macOS this needs Docker Desktop, and on Windows also WSL: run `wsl --install` in PowerShell
+as administrator once.
 
 By default the port only listens on the machine itself. From your own computer, reach it through an SSH tunnel:
 
