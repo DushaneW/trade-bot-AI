@@ -79,3 +79,21 @@ def test_volume_distrusts_a_move_on_thin_volume():
 
 def test_volume_stays_silent_without_history():
     assert ANALYSTS["volume"]().read(series(np.full(20, 1.0))) is None
+
+
+def test_regime_calls_a_clean_trend_and_a_chop():
+    assert "Clean up" in read("regime", trend(100)).note
+    assert "Choppy" in read("regime", 100 + np.tile([1.0, -1.0], 50)).note
+
+
+def test_structure_leans_up_near_support_and_down_near_resistance():
+    swing = 100 + 10 * np.sin(np.linspace(0, 6 * np.pi, 150))
+    low = read("structure", np.append(swing, 91.5))
+    high = read("structure", np.append(swing, 108.5))
+    assert low.direction > 0 and "support" in low.note
+    assert high.direction < 0 and "resistance" in high.note
+
+
+def test_structure_reports_a_range_test():
+    swing = 100 + 10 * np.sin(np.linspace(0, 6 * np.pi, 150))
+    assert "Testing range high" in read("structure", np.append(swing, 115)).note
