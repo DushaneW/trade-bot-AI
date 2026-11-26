@@ -12,16 +12,23 @@ import asyncio
 import hashlib
 import hmac
 import os
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 COOKIE = "quorum_session"
 MAX_AGE = 30 * 86_400
+MAX_FAILURES = 5          # wrong passwords from one address before it has to wait
+LOCKOUT_S = 15 * 60
 OPEN_PATHS = {"/login", "/api/health", "/static/favicon.svg", "/static/app.css"}
 
 
 class Gate:
-    def __init__(self, data_dir: Path, password: str | None = None) -> None:
+    def __init__(self, data_dir: Path, password: str | None = None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         self.password = password if password is not None else os.environ.get("QUORUM_PASSWORD", "")
+        self.clock = clock
+        self._failures: dict[str, list[float]] = {}
         key_file = data_dir / "secret.key"
         self._key = key_file.read_bytes() if key_file.exists() else os.urandom(32)
 
@@ -36,10 +43,20 @@ class Gate:
     def allows(self, cookie: str | None) -> bool:
         return not self.enabled or (cookie is not None and hmac.compare_digest(cookie, self.token()))
 
-    async def check_password(self, attempt: str) -> bool:
+    def locked_for(self, client: str) -> float:
+        """Seconds this address must wait after too many wrong passwords, 0 when it may try."""
+        now = self.clock()
+        recent = [t for t in self._failures.get(client, []) if now - t < LOCKOUT_S]
+        self._failures[client] = recent
+        return LOCKOUT_S - (now - recent[-MAX_FAILURES]) if len(recent) >= MAX_FAILURES else 0.0
+
+    async def check_password(self, attempt: str, client: str = "", delay: float = 1.0) -> bool:
         ok = hmac.compare_digest(attempt.encode(), self.password.encode())
-        if not ok:
-            await asyncio.sleep(1.0)  # slow down guessing
+        if ok:
+            self._failures.pop(client, None)
+        else:
+            self._failures.setdefault(client, []).append(self.clock())
+            await asyncio.sleep(delay)  # slow down guessing
         return ok
 
 

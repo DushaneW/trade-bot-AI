@@ -27,6 +27,26 @@ def test_changing_the_password_signs_everyone_out(tmp_path):
     assert not Gate(tmp_path, password="two").allows(old)
 
 
+async def test_too_many_wrong_passwords_lock_out_that_address_only(tmp_path):
+    now = [0.0]
+    gate = Gate(tmp_path, password="right", clock=lambda: now[0])
+    for _ in range(5):
+        assert not await gate.check_password("wrong", "1.2.3.4", delay=0)
+    assert gate.locked_for("1.2.3.4") > 0
+    assert gate.locked_for("5.6.7.8") == 0
+    now[0] += 15 * 60 + 1
+    assert gate.locked_for("1.2.3.4") == 0
+
+
+async def test_a_right_password_clears_earlier_mistakes(tmp_path):
+    gate = Gate(tmp_path, password="right")
+    for _ in range(4):
+        await gate.check_password("wrong", "a", delay=0)
+    assert await gate.check_password("right", "a", delay=0)
+    await gate.check_password("wrong", "a", delay=0)
+    assert gate.locked_for("a") == 0
+
+
 def test_underscore_files_stay_inactive(tmp_path):
     shutil.copy(EXAMPLE, tmp_path / "_example_analyst.py")
     assert load_plugins(tmp_path) == ([], [])

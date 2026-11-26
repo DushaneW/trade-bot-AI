@@ -118,8 +118,13 @@ def create_app(data_dir: Path | None = None, strategies_dir: Path | None = None)
 
     @app.post("/login")
     async def login(request: Request) -> Response:
+        client = request.client.host if request.client else ""
+        wait = gate.locked_for(client)
+        if wait:
+            note = f'<div class="hint bad">Too many wrong passwords. Try again in {wait / 60:.0f} minutes.</div>'
+            return HTMLResponse(LOGIN_PAGE.format(error=note), status_code=429)
         attempt = parse_qs((await request.body()).decode())
-        if gate.enabled and await gate.check_password((attempt.get("password") or [""])[0]):
+        if gate.enabled and await gate.check_password((attempt.get("password") or [""])[0], client):
             resp = RedirectResponse("/", status_code=303)
             resp.set_cookie(COOKIE, gate.token(), max_age=MAX_AGE, httponly=True, samesite="strict",
                             secure=request.url.scheme == "https")
