@@ -97,3 +97,42 @@ def test_structure_leans_up_near_support_and_down_near_resistance():
 def test_structure_reports_a_range_test():
     swing = 100 + 10 * np.sin(np.linspace(0, 6 * np.pi, 150))
     assert "Testing range high" in read("structure", np.append(swing, 115)).note
+
+
+def cross(key: str, closes: dict, **params):
+    return ANALYSTS[key](params).read_all({k: series(c) for k, c in closes.items()})
+
+
+def test_breadth_and_ranking_need_at_least_two_markets():
+    for key in ("breadth", "relative", "correlation"):
+        assert cross(key, {"a": trend(200)}) == {}
+
+
+def test_ranking_puts_the_strongest_market_first():
+    out = cross("relative", {"fast": trend(200, step=0.004), "slow": trend(200, step=0.001),
+                             "down": trend(200, step=-0.002)})
+    assert out["fast"].direction > out["slow"].direction > out["down"].direction
+    assert out["fast"].note.startswith("Rank 1 of 3")
+
+
+def test_breadth_leans_up_when_most_markets_rise():
+    out = cross("breadth", {"a": trend(200), "b": trend(200, step=0.003), "c": trend(200, step=-0.001)})
+    assert out["a"].direction > 0 and "67%" in out["a"].note
+
+
+def test_correlation_spots_a_laggard_that_has_not_caught_up():
+    rng = np.random.default_rng(3)
+    leader = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 200)))
+    follower = leader * 0.05 * np.exp(rng.normal(0, 0.001, 200))
+    follower[-10:] = follower[-11]  # the leader kept moving, the follower stood still
+    leader[-10:] = leader[-11] * np.linspace(1.002, 1.03, 10)
+    out = cross("correlation", {"BTC": leader, "SOL": follower})
+    assert out["SOL"].direction > 0 and "Lagging BTC" in out["SOL"].note
+
+
+def test_correlation_stays_quiet_on_unrelated_markets():
+    rng = np.random.default_rng(4)
+    a = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 200)))
+    b = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 200)))
+    out = cross("correlation", {"a": a, "b": b})
+    assert out["a"].direction == 0.0 and "on its own" in out["a"].note
