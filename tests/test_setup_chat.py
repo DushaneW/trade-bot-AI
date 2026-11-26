@@ -183,3 +183,13 @@ async def test_asking_what_is_held_lists_positions_and_their_stops(lead, engine)
     reply = await ask_and_wait("Which positions are open, and where are the stops?")
     assert reply["text"].startswith("1 open position")
     assert "SOL/USDT" in reply["items"][0]["text"] and "exchange stop at" in reply["items"][0]["text"]
+
+
+async def test_questions_are_matched_to_the_markets_they_name(lead, engine):
+    await finished(lead)
+    await engine._tick_account(next(iter(engine.accounts.values())))  # the Chair matches against live prices
+    found = lambda text: sorted(k.split(":", 1)[1] for k in lead._match_markets(text))  # noqa: E731
+    assert found("What about BTC?") == ["BTC/USDT"]
+    assert found("eth and sol, buy or wait") == ["ETH/USDT", "SOL/USDT"]
+    assert found("how is usdt doing") == []  # the quote currency names no market
+    assert found("tell me about the weather") == []
