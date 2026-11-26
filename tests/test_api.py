@@ -74,3 +74,35 @@ def test_health_answers_without_a_password_and_tells_nothing_else(tmp_path, monk
 def test_sending_the_summary_needs_a_channel_first(open_api):
     r = open_api.post("/api/notify/summary")
     assert r.status_code == 400 and "Telegram" in r.json()["detail"]
+
+
+@pytest.fixture
+def with_account(open_api):
+    acc = open_api.post("/api/accounts", json={"name": "Sim", "market": "crypto", "venue": "sim",
+                                               "symbols": ["BTC/USDT", "ETH/USDT"]}).json()
+    return open_api, acc
+
+
+def test_bots_can_be_created_edited_and_deleted(with_account):
+    c, acc = with_account
+    bot = c.post("/api/bots", json={"strategy": "momentum", "account_id": acc["id"], "symbols": ["BTC/USDT"]}).json()
+    assert bot["name"] == "Tempo" and bot["role"] == "analyst"
+    renamed = c.patch(f"/api/bots/{bot['id']}", json={"name": "Pace"}).json()
+    assert renamed["name"] == "Pace"
+    assert c.get(f"/api/bots/{bot['id']}").json()["name"] == "Pace"
+    assert c.delete(f"/api/bots/{bot['id']}").json() == {"ok": True}
+    assert c.get(f"/api/bots/{bot['id']}").status_code == 404
+
+
+def test_bad_bot_requests_explain_themselves(with_account):
+    c, acc = with_account
+    assert "Unknown strategy" in c.post("/api/bots", json={"strategy": "x"}).json()["detail"]
+    r = c.post("/api/bots", json={"strategy": "momentum", "account_id": acc["id"], "symbols": ["DOGE/USDT"]})
+    assert r.status_code == 400 and "symbol" in r.json()["detail"]
+
+
+def test_accounts_in_use_cannot_be_removed(with_account):
+    c, acc = with_account
+    c.post("/api/bots", json={"strategy": "momentum", "account_id": acc["id"], "symbols": ["BTC/USDT"]})
+    r = c.delete(f"/api/accounts/{acc['id']}")
+    assert r.status_code == 400 and "bots using this account" in r.json()["detail"]
