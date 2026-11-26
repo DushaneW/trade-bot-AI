@@ -34,6 +34,12 @@ def spec(strategy="breakout", **kw):
     return BacktestSpec(strategy, ["BTC/USDT", "ETH/USDT"], Market.CRYPTO, **kw)
 
 
+@pytest.fixture(scope="module")
+def tape(history):
+    """Recording the council is the slow part, and the same for every trader: do it once."""
+    return record(spec(), history)
+
+
 def test_align_keeps_only_shared_timestamps():
     a = [Candle(t, 1, 1, 1, 1, 1) for t in (1, 2, 3)]
     b = [Candle(t, 1, 1, 1, 1, 1) for t in (2, 3, 4)]
@@ -48,9 +54,8 @@ def test_too_little_history_is_refused():
         record(spec(), short)
 
 
-def test_fills_happen_at_the_next_bars_open_with_fees_and_slippage(history):
-    result = run_backtest(spec(), history)
-    tape = record(spec(), history)
+def test_fills_happen_at_the_next_bars_open_with_fees_and_slippage(tape):
+    result = simulate(spec(), tape)
     opens = {k: dict(zip(tape.ts, tape.arrays[k][0], strict=True)) for k in tape.keys}
     assert result["trade_log"], "the breakout trader should trade on this history"
     for t in result["trade_log"]:
@@ -61,22 +66,20 @@ def test_fills_happen_at_the_next_bars_open_with_fees_and_slippage(history):
         assert t["fee"] == pytest.approx(t["qty"] * t["price"] * FEE)
 
 
-def test_a_replay_matches_the_record_then_simulate_split(history):
+def test_a_replay_matches_the_record_then_simulate_split(history, tape):
     whole = run_backtest(spec(), history)
-    parts = simulate(spec(), record(spec(), history))
+    parts = simulate(spec(), tape)
     assert whole["return"] == pytest.approx(parts["return"])
     assert whole["trades"] == parts["trades"]
 
 
-def test_simulating_a_stretch_starts_with_a_fresh_budget(history):
-    tape = record(spec(), history)
+def test_simulating_a_stretch_starts_with_a_fresh_budget(tape):
     out = simulate(spec(budget=250), tape, start=400, end=600)
     assert out["bars"] == 200
     assert out["equity_curve"][0][1] == pytest.approx(250, rel=0.05)
 
 
-def test_analysts_that_need_live_exchange_data_sit_backtests_out(history):
-    tape = record(spec(), history)
+def test_analysts_that_need_live_exchange_data_sit_backtests_out(tape):
     assert not {"funding", "open_interest", "order_book"} & set(tape.analysts)
 
 
