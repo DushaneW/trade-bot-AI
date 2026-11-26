@@ -60,3 +60,45 @@ def test_fees_in_a_third_token_or_missing_use_the_taker_rate():
     bnb = {"fee": {"cost": 0.002, "currency": "BNB"}}
     assert _fees(bnb, "BTC", "USDT", 50_000, 0.01) == pytest.approx((0.5, 0.0))
     assert _fees({}, "BTC", "USDT", 50_000, 0.01) == pytest.approx((0.5, 0.0))
+
+
+def test_testnet_detection_needs_no_network():
+    from quorum.connectors.crypto import has_testnet
+
+    assert has_testnet("binance") and has_testnet("bybit") and has_testnet("okx")
+    for venue in ("kraken", "coinbase", "kucoin", "bitget", "mexc"):  # ccxt lists an empty test entry for these
+        assert not has_testnet(venue), venue
+    assert not has_testnet("not-an-exchange")
+
+
+def test_asking_for_a_testnet_that_does_not_exist_fails_instead_of_going_live():
+    from quorum.connectors.crypto import CryptoConnector
+
+    with pytest.raises(ValueError, match="no testnet"):
+        CryptoConnector("kraken", "key", "secret", sandbox=True)
+    with pytest.raises(ValueError, match="Unknown exchange"):
+        CryptoConnector("my-bank")
+
+
+async def test_keys_decide_whether_exchange_stops_are_possible():
+    from quorum.connectors.crypto import CryptoConnector
+
+    public = CryptoConnector("binance", sandbox=False)
+    keyed = CryptoConnector("binance", "key", "secret", sandbox=False)
+    try:
+        assert not public.supports_stops and keyed.supports_stops
+    finally:
+        await public.close()
+        await keyed.close()
+
+
+async def test_brokers_build_without_touching_the_network():
+    alpaca = build({"venue": "alpaca", "market": "stocks", "sandbox": True}, {"api_key": "k", "secret": "s"})
+    oanda = build({"venue": "oanda", "market": "forex", "sandbox": True}, {"api_key": "t", "account_id": "1"})
+    try:
+        assert "paper-api" in str(alpaca.trade.base_url) and "fxpractice" in str(oanda.http.base_url)
+        assert alpaca.supports_stops and oanda.supports_stops
+        assert oanda.normalize_qty("EUR_USD", 1234.9) == 1234
+    finally:
+        await alpaca.close()
+        await oanda.close()

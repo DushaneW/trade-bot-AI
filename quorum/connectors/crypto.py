@@ -25,7 +25,8 @@ def _reason(exc: Exception) -> str:
 
 def has_testnet(venue: str) -> bool:
     try:
-        return "test" in getattr(ccxt_sync, venue)().urls  # sync class: no network session is opened
+        # ccxt lists a "test" entry for every exchange, empty for those without a testnet.
+        return bool(getattr(ccxt_sync, venue)().urls.get("test"))  # sync class: no network session is opened
     except Exception:
         return False
 
