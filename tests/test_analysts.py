@@ -136,3 +136,43 @@ def test_correlation_stays_quiet_on_unrelated_markets():
     b = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 200)))
     out = cross("correlation", {"a": a, "b": b})
     assert out["a"].direction == 0.0 and "on its own" in out["a"].note
+
+
+def with_extra(close, **extra):
+    s = series(close)
+    s.extra = extra
+    return s
+
+
+def test_exchange_data_analysts_stay_silent_without_data():
+    for key in ("funding", "open_interest", "order_book"):
+        assert ANALYSTS[key]().read(series(trend(100))) is None
+        assert ANALYSTS[key].needs_extras and ANALYSTS[key].markets == ("crypto",)
+
+
+def test_funding_calls_crowded_longs_and_crowded_shorts():
+    hot = ANALYSTS["funding"]().read(with_extra(trend(100), funding_rate=0.001))
+    cold = ANALYSTS["funding"]().read(with_extra(trend(100), funding_rate=-0.0005))
+    calm = ANALYSTS["funding"]().read(with_extra(trend(100), funding_rate=0.0001))
+    assert hot.direction < 0 and "longs are crowded" in hot.note
+    assert cold.direction > 0 and "shorts are crowded" in cold.note
+    assert calm.direction == 0.0
+
+
+def test_open_interest_separates_new_money_from_closing_positions():
+    rising = trend(100, step=0.001)
+    fresh = ANALYSTS["open_interest"]().read(with_extra(rising, oi_change=0.05, oi_minutes=60))
+    covering = ANALYSTS["open_interest"]().read(with_extra(rising, oi_change=-0.04, oi_minutes=60))
+    assert fresh.direction > 0 and "new money" in fresh.note
+    assert covering.direction < 0 and "may fade" in covering.note
+
+
+def test_order_book_speaks_softly():
+    r = ANALYSTS["order_book"]().read(with_extra(trend(100), book_imbalance=0.9))
+    assert r.direction > 0 and r.confidence <= 0.55
+    assert ANALYSTS["order_book"]().read(with_extra(trend(100), book_imbalance=0.05)).direction == 0.0
+
+
+def test_series_tail_keeps_the_exchange_data():
+    s = with_extra(trend(300), funding_rate=0.0002)
+    assert s.tail(50).extra == {"funding_rate": 0.0002}
