@@ -103,15 +103,19 @@ class Onboarding:
                              {"type": "choice", "options": MARKET_OPTIONS})
         elif step == "venue":
             options = [{"value": v, "label": VENUE_NAMES[v]} for v in VENUES[s["market"]]]
-            self.lead.prompt("venue", "Which exchange or broker holds your account?", {"type": "choice", "options": options})
+            self.lead.prompt("venue", "Which exchange or broker holds your account?",
+                             {"type": "choice", "options": options})
         elif step == "connect":
-            self.lead.prompt("connect", f"Connect your {VENUE_NAMES[s['venue']]} account. Create an API key that can trade but cannot withdraw.",
+            name = VENUE_NAMES[s["venue"]]
+            self.lead.prompt("connect", f"Connect your {name} account. "
+                                        "Create an API key that can trade but cannot withdraw.",
                              {"type": "form", "fields": self._key_fields(s["market"], s["venue"]),
                               "help": KEY_HELP.get(s["venue"], ""), "submit": "Connect account"})
         elif step == "markets":
             acc = self.engine.accounts[s["account_id"]]
             options = [{"value": m, "label": m} for m in self._available(acc)]
-            self.lead.prompt("markets", "Which markets should the council watch and trade? Fewer markets means more focus.",
+            self.lead.prompt("markets", "Which markets should the council watch and trade? "
+                                        "Fewer markets means more focus.",
                              {"type": "multi", "options": options, "selected": [o["value"] for o in options[:3]],
                               "submit": "Use these markets"})
         elif step == "budget":
@@ -119,30 +123,36 @@ class Onboarding:
             balance = acc.status.balance_quote if acc.status else None
             default = round(min(100.0, balance), 2) if balance else 100.0
             where = "testnet funds" if acc.record.get("sandbox") else "real money from your account"
-            self.lead.prompt("budget", f"How much should the team work with? The traders place real orders with {where}.",
+            free = f"Free on the account: {balance:,.2f}. " if balance is not None else ""
+            hint = f"{free}At least {self._floor():g}. Whatever you don't give the team stays untouched."
+            self.lead.prompt("budget", f"How much should the team work with? "
+                                       f"The traders place real orders with {where}.",
                              {"type": "form", "submit": "Continue", "fields": [
                                  {"name": "budget", "label": "Budget for the team", "kind": "number", "value": default,
-                                  "hint": (f"Free on the account: {balance:,.2f}. " if balance is not None else "")
-                                          + f"At least {self._floor():g}. Whatever you don't give the team stays untouched."},
-                                 {"name": "confirm", "label": "I understand the traders can lose this money.", "kind": "check"},
+                                  "hint": hint},
+                                 {"name": "confirm", "label": "I understand the traders can lose this money.",
+                                  "kind": "check"},
                              ]})
         elif step == "team":
             budget, floor = s["budget"], self._floor()
             fits = max(1, min(len(HIRING_ORDER), int(budget // (floor * 1.6))))
             options = [{"value": k, "label": f"{TRADERS[k].persona} · {TRADERS[k].title}", "hint": TRADER_HINTS[k]}
                        for k in HIRING_ORDER]
+            who = f"{fits} traders keep" if fits > 1 else "1 trader keeps"
             advice = ("All five fit comfortably." if fits == len(HIRING_ORDER) else
-                      f"With {budget:,.2f}, {fits} trader{'s' if fits > 1 else ''} keep{'s' if fits == 1 else ''} every order "
-                      "comfortably above the exchange minimum, so I picked those.")
+                      f"With {budget:,.2f}, {who} every order comfortably above the exchange minimum, "
+                      "so I picked those.")
             self.lead.prompt("team", f"Who should trade for you? The budget is split evenly between them. {advice}",
-                             {"type": "multi", "options": options, "selected": HIRING_ORDER[:fits], "submit": "Hire them"})
+                             {"type": "multi", "options": options, "selected": HIRING_ORDER[:fits],
+                              "submit": "Hire them"})
         elif step == "risk":
             options = [{"value": k, "label": p["label"], "hint": p["hint"]} for k, p in PROFILES.items()]
             self.lead.prompt("risk", "How careful should they be? You can change this per trader later.",
                              {"type": "choice", "options": options})
         elif step == "ready":
             self.lead.prompt("ready", "Everything is in place. The council stays idle until you start it.",
-                             {"type": "choice", "options": [{"value": "start", "label": "Start the council", "primary": True}]})
+                             {"type": "choice",
+                              "options": [{"value": "start", "label": "Start the council", "primary": True}]})
 
     def _key_fields(self, market: str, venue: str) -> list[dict]:
         from .connectors.crypto import has_testnet
@@ -159,7 +169,8 @@ class Onboarding:
         if market == "stocks":
             return [{"name": "api_key", "label": "API key ID", "kind": "text"},
                     {"name": "secret", "label": "Secret key", "kind": "secret"},
-                    {"name": "sandbox", "label": "This key is for an Alpaca practice (paper) account", "kind": "check", "value": True}]
+                    {"name": "sandbox", "label": "This key is for an Alpaca practice (paper) account", "kind": "check",
+                     "value": True}]
         return [{"name": "api_key", "label": "API token", "kind": "secret"},
                 {"name": "account_id", "label": "Account ID", "kind": "text", "placeholder": "101-004-1234567-001"},
                 {"name": "sandbox", "label": "This is a practice account", "kind": "check", "value": True}]
@@ -223,7 +234,8 @@ class Onboarding:
         st = acc.status
         if not st.can_trade:
             await self.engine.remove_account(acc.id)
-            self.lead.notice(f"{name} accepted the key, but it cannot place orders. Enable trading on the key and try again.")
+            self.lead.notice(f"{name} accepted the key, but it cannot place orders. "
+                             "Enable trading on the key and try again.")
             self._ask("connect")
             return
         balance = f" Free balance: {st.balance_quote:,.2f}." if st.balance_quote is not None else ""
