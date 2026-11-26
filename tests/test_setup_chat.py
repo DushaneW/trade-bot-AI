@@ -152,3 +152,12 @@ async def test_setup_refuses_answers_that_make_no_sense(lead):
     await answer(lead, {"budget": 100, "confirm": True})
     with pytest.raises(ConfigError):
         await answer(lead, {"choices": []})
+
+
+def test_the_testnet_box_only_appears_where_a_testnet_exists(lead):
+    fields = lambda venue: {f["name"] for f in lead.onboarding._key_fields("crypto", venue)}  # noqa: E731
+    assert "sandbox" in fields("binance")
+    assert "sandbox" not in fields("kraken")
+    assert "password" in fields("okx") and "password" not in fields("binance")
+    forex = {f["name"] for f in lead.onboarding._key_fields("forex", "oanda")}
+    assert forex == {"api_key", "account_id", "sandbox"}
