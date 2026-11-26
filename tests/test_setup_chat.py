@@ -134,3 +134,21 @@ async def test_briefing_stays_quiet_when_nothing_changed(lead, engine):
 async def test_unknown_proposals_are_404s(lead):
     with pytest.raises(KeyError):
         lead.apply_proposal("nope", "nope")
+
+
+async def test_setup_refuses_answers_that_make_no_sense(lead):
+    with pytest.raises(ConfigError):
+        await answer(lead, {"choice": "commodities"})
+    await answer(lead, {"choice": "crypto"})
+    with pytest.raises(ConfigError):
+        await answer(lead, {"choice": "my-bank"})
+    await answer(lead, {"choice": "binance"})
+    await answer(lead, {"api_key": "k" * 20, "secret": "s", "sandbox": True})
+    with pytest.raises(ConfigError):
+        await answer(lead, {"choices": []})
+    await answer(lead, {"choices": SYMBOLS})
+    with pytest.raises(ConfigError):
+        await answer(lead, {"budget": 1, "confirm": True})  # below what one trader needs
+    await answer(lead, {"budget": 100, "confirm": True})
+    with pytest.raises(ConfigError):
+        await answer(lead, {"choices": []})
