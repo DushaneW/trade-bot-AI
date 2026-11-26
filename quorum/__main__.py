@@ -9,16 +9,22 @@ import webbrowser
 
 import uvicorn
 
+from . import __version__
 from .api import create_app
 
 
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="quorum", description="Self-hosted multi-bot trading council")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="Interface to bind. Keep 127.0.0.1 unless you secure the network yourself.")
+    p.add_argument("--port", type=int, default=8420)
+    p.add_argument("--no-browser", action="store_true", help="Do not open the dashboard on start")
+    p.add_argument("--version", action="version", version=f"Quorum {__version__}")
+    return p
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="quorum", description="Self-hosted multi-bot trading council")
-    parser.add_argument("--host", default="127.0.0.1",
-                        help="Interface to bind. Keep 127.0.0.1 unless you secure the network yourself.")
-    parser.add_argument("--port", type=int, default=8420)
-    parser.add_argument("--no-browser", action="store_true", help="Do not open the dashboard on start")
-    args = parser.parse_args()
+    args = parser().parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     if args.host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("QUORUM_PASSWORD"):
