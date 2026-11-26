@@ -53,7 +53,8 @@ def _default_strategies_dir() -> Path:
 
 STRATEGIES_DIR = Path(os.environ.get("QUORUM_STRATEGIES") or _default_strategies_dir())
 
-CSV_FIELDS = ["time_utc", "trader", "account", "market", "side", "quantity", "price", "value", "fee", "result", "reason"]
+CSV_FIELDS = ["time_utc", "trader", "account", "market", "side", "quantity", "price", "value", "fee", "result",
+              "reason"]
 
 
 def create_app() -> FastAPI:

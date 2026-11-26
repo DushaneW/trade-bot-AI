@@ -144,7 +144,8 @@ class Engine:
         elif topic == "bot" and d.get("event") == "paused":
             bot, text = d["bot"], f"Paused: {d['reason']}"
         elif topic == "stop" and d.get("event") == "placed":
-            bot, text = d["bot"], f"Backup stop for {d['key'].split(':', 1)[1]} resting on the exchange at {d['price']:.6g}"
+            symbol = d["key"].split(":", 1)[1]
+            bot, text = d["bot"], f"Backup stop for {symbol} resting on the exchange at {d['price']:.6g}"
         else:
             return
         self.last_said[bot] = {"ts": msg["ts"], "text": text, "topic": topic}
@@ -400,7 +401,8 @@ class Engine:
         """Traders place real orders, so their account must be verified, able to trade and unable to withdraw."""
         st = self.accounts[account_id].status
         if not st or not st.ok or not st.can_trade:
-            raise ConfigError("This account's key isn't verified for trading. Check the connection on the Accounts page")
+            raise ConfigError("This account's key isn't verified for trading. "
+                              "Check the connection on the Accounts page")
         if st.can_withdraw:
             raise ConfigError("This account's key can withdraw funds. Create a trade-only key")
 

@@ -53,6 +53,7 @@ LOGIN_PAGE = """<!doctype html>
   <h1>Quorum</h1>
   <p>This dashboard controls real money. Enter the password set in QUORUM_PASSWORD.</p>
   {error}
-  <input class="input" type="password" name="password" autocomplete="current-password" autofocus required placeholder="Password">
+  <input class="input" type="password" name="password" autocomplete="current-password" autofocus required
+         placeholder="Password">
   <button class="btn primary" type="submit">Sign in</button>
 </form></body></html>"""
