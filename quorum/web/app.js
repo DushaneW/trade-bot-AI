@@ -1258,12 +1258,25 @@ const views = {
           <div class="card open"><div class="card-head">Analysts during the test<span class="meta">accuracy</span></div><div class="card-body"><div>
             ${analysts.map((a) => `<div class="item" style="align-items:center">${avatar({ id: a.key, strategy: a.key, role: "analyst" }, "s")}<div><b>${esc(a.persona)}</b> <span class="muted">· ${esc(a.title)}</span></div><span class="${a.accuracy >= 0.5 ? "up" : "down"}">${Math.round(a.accuracy * 100)}% of ${a.calls}</span></div>`).join("")}
           </div></div></div>
-          <div class="card open"><div class="card-head">Last trades<span class="meta">${r.trade_log.length}</span></div><div class="card-body"><div style="max-height:420px;overflow-y:auto">
+          <div class="card open"><div class="card-head">Last trades<span class="meta">${r.trade_log.length ? `<a href="#" id="btCsv">Download CSV</a> · ` : ""}${r.trade_log.length}</span></div><div class="card-body"><div style="max-height:420px;overflow-y:auto">
             ${r.trade_log.slice(-40).reverse().map((t) => `<div class="item"><span class="st ${t.pnl > 0 ? "ok" : t.pnl < 0 ? "fail" : "idle"}"></span><div style="min-width:0"><b>${t.side === "buy" ? "Buy" : "Sell"} ${esc(t.symbol)}</b> <span class="muted">at ${fmt.price(t.price)}</span><div class="sub"><span>${esc(t.reason)}</span></div></div><span class="${fmt.tone(t.pnl)}">${t.pnl ? fmt.signed(t.pnl) : ""}</span></div>`).join("") || `<div class="empty">No trades. The setup never triggered.</div>`}
           </div></div></div>
         </div>
         <div class="hint" style="margin-top:12px">A backtest cannot see order-book depth, outages or funding costs, and a strategy tuned to look good on one stretch of history usually disappoints on the next. Treat this as a filter for bad ideas, not proof of a good one. Next step for anything promising: try it on a testnet account.</div>
         ${detail.bot_id ? "" : `<div style="margin-top:12px"><button class="btn" id="adopt">Hire this trader</button></div>`}`;
+      $("#btCsv", el)?.addEventListener("click", (e) => {
+        e.preventDefault();
+        const rows = [["time_utc", "market", "side", "quantity", "price", "fee", "result", "reason"],
+          ...r.trade_log.map((t) => [new Date(t.ts).toISOString().replace("T", " ").slice(0, 19), sym(t.symbol), t.side,
+            t.qty, t.price, t.fee.toFixed(6), t.pnl.toFixed(6), t.reason])];
+        const cell = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v);
+        const csv = rows.map((row) => row.map(cell).join(",")).join("\n");
+        const a = Object.assign(document.createElement("a"), {
+          href: URL.createObjectURL(new Blob([csv + "\n"], { type: "text/csv" })),
+          download: `quorum-backtest-${r.persona.toLowerCase()}-${new Date(r.end).toISOString().slice(0, 10)}.csv` });
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
       $("#adopt", el)?.addEventListener("click", async () => {
         try {
           const b = await api("/api/bots", { method: "POST", body: { strategy: r.strategy, account_id: accs.find((a) => a.name === detail.account)?.id ?? form.account, symbols: r.symbols, budget: r.budget, profile: detail.profile } });
