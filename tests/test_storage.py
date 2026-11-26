@@ -37,3 +37,24 @@ def test_mask_shows_only_the_ends_of_a_key():
     assert mask("ABCDEFGHIJKL") == "ABCD…JKL"
     assert mask("short") == "•••"
     assert mask("") == ""
+
+
+def test_chat_keeps_order_and_updates_in_place(tmp_path):
+    store = Store(tmp_path / "q.db")
+    for i in range(3):
+        store.save_chat({"id": f"m{i}", "ts": i, "text": str(i)})
+    store.save_chat({"id": "m1", "ts": 1, "text": "edited"})
+    assert [m["text"] for m in store.chat()] == ["0", "edited", "2"]
+    assert store.chat_message("m1")["text"] == "edited"
+    assert store.chat_message("missing") is None
+    assert [m["id"] for m in store.chat(limit=2)] == ["m1", "m2"]
+
+
+def test_accounts_round_trip_and_delete(tmp_path):
+    store = Store(tmp_path / "q.db")
+    store.save_account({"id": "a", "name": "Main", "market": "crypto", "venue": "binance", "sandbox": True,
+                        "secrets": "sealed", "symbols": ["BTC/USDT"], "created": 1})
+    acc = store.accounts()[0]
+    assert acc["sandbox"] is True and acc["symbols"] == ["BTC/USDT"]
+    store.delete_account("a")
+    assert store.accounts() == []
