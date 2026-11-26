@@ -1354,7 +1354,8 @@ const views = {
           ${plugins.errors.map((e) => `<div class="hint bad">${esc(e)}</div>`).join("")}
           ${state.overview.skipped_bots?.length ? `<div class="hint bad">Not loaded because their plugin file is missing: ${state.overview.skipped_bots.map(esc).join(", ")}</div>` : ""}
         </div>
-        ${state.overview.auth ? `<div style="margin-top:24px"><a class="btn" href="/logout">Sign out</a></div>` : ""}
+        <div class="about">Quorum ${esc(state.overview.version ?? "")} · <a href="https://github.com/DushaneW/trade-bot-AI/releases" target="_blank" rel="noopener">What's new</a> · <a href="https://github.com/DushaneW/trade-bot-AI/issues/new/choose" target="_blank" rel="noopener">Report a problem</a>
+          ${state.overview.auth ? ` · <a href="/logout">Sign out</a>` : ""}</div>
       </div>`;
       $("#exStops", el).addEventListener("change", async (e) => {
         try {

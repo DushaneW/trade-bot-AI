@@ -139,7 +139,7 @@ def create_app(data_dir: Path | None = None, strategies_dir: Path | None = None)
 
     @app.get("/api/state")
     def state() -> dict:
-        return {**engine.overview(), "setup": lead.onboarding.summary(), "auth": gate.enabled,
+        return {**engine.overview(), "setup": lead.onboarding.summary(), "auth": gate.enabled, "version": __version__,
                 "plugins": {"loaded": plugins, "errors": plugin_errors, "folder": str(strategies_dir)}}
 
     @app.post("/api/council")

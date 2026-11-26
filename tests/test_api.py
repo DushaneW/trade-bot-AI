@@ -22,6 +22,7 @@ def test_state_and_catalog_describe_a_fresh_install(open_api):
     state = open_api.get("/api/state").json()
     assert state["running"] is False and state["bots"] == [] and state["auth"] is False
     assert state["setup"]["step"] == "market"
+    assert state["version"].count(".") == 2
     catalog = open_api.get("/api/catalog").json()
     assert set(catalog["profiles"]) == {"careful", "balanced", "bold"}
     assert {s["key"] for s in catalog["strategies"]} >= {"trend_rider", "funding"}
