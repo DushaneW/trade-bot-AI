@@ -62,3 +62,41 @@ def test_risk_warnings_are_judged_on_the_size_of_the_move():
     council.hear("seismo", "acc:ETH", warn, 100.0, 0, BAR, atr_frac=0.01)
     results = council.score({KEY: 95.0, "acc:ETH": 100.5}, now=BAR * 4)
     assert sorted(results) == [("seismo", False), ("seismo", True)]  # BTC moved 5%: right; ETH 0.5%: wrong
+
+
+def test_consensus_weights_proven_analysts_more():
+    council = Council()
+    for _ in range(40):
+        council.rep("good", f"m:{KEY}").record(True)
+        council.rep("good").record(True)
+        council.rep("bad", f"m:{KEY}").record(False)
+        council.rep("bad").record(False)
+    council.hear("good", KEY, Reading("trend", 1.0, 1.0, "up"), 100, 0, BAR, 0.01)
+    council.hear("bad", KEY, Reading("trend", -1.0, 1.0, "down"), 100, 0, BAR, 0.01)
+    vote = council.consensus(KEY, now=0, bar_ms=BAR)
+    assert vote.direction > 0.5
+    assert len(vote.voices) == 2
+
+
+def test_stale_readings_drop_out_of_the_vote():
+    council = Council(freshness_bars=3)
+    council.hear("a", KEY, Reading("trend", 1.0, 1.0, "up"), 100, 0, BAR, 0.01)
+    assert council.consensus(KEY, now=BAR * 4, bar_ms=BAR).voices == []
+
+
+def test_risk_warnings_feed_risk_off_not_direction():
+    council = Council()
+    council.hear("seismo", KEY, Reading("risk", -1.0, 0.8, "wild"), 100, 0, BAR, 0.01)
+    vote = council.consensus(KEY, now=0, bar_ms=BAR)
+    assert vote.direction == 0.0
+    assert vote.risk_off == pytest.approx(0.8)
+
+
+def test_profile_lists_markets_and_regimes_separately():
+    council = Council()
+    council.rep("a", f"m:{KEY}").record(True)
+    council.rep("a", "r:chop").record(False)
+    council.rep("a", "r:trend").record(True)
+    prof = council.profile("a")
+    assert [m["name"] for m in prof["markets"]] == [KEY]
+    assert [r["name"] for r in prof["regimes"]] == ["trend", "chop"]
