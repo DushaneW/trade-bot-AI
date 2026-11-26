@@ -3,8 +3,19 @@ import asyncio
 
 import pytest
 
-from quorum.backtest import (FEE, MIN_FOLD_BARS, SLIPPAGE, WARMUP, BacktestSpec, _align, _grid, record,
-                             run_backtest, run_walk_forward, simulate)
+from quorum.backtest import (
+    FEE,
+    MIN_FOLD_BARS,
+    SLIPPAGE,
+    WARMUP,
+    BacktestSpec,
+    _align,
+    _grid,
+    record,
+    run_backtest,
+    run_walk_forward,
+    simulate,
+)
 from quorum.connectors.sim import SimConnector
 from quorum.models import Candle, Market
 
