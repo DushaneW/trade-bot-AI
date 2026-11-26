@@ -69,3 +69,8 @@ def test_health_answers_without_a_password_and_tells_nothing_else(tmp_path, monk
 
     with client(tmp_path, monkeypatch, password="s3cret") as c:
         assert c.get("/api/health").json() == {"ok": True, "version": __version__}
+
+
+def test_sending_the_summary_needs_a_channel_first(open_api):
+    r = open_api.post("/api/notify/summary")
+    assert r.status_code == 400 and "Telegram" in r.json()["detail"]

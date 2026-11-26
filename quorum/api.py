@@ -277,6 +277,15 @@ def create_app(data_dir: Path | None = None, strategies_dir: Path | None = None)
             raise HTTPException(502, str(exc)) from exc
         return {"ok": True}
 
+    @app.post("/api/notify/summary")
+    async def send_summary() -> dict:
+        """Send the daily summary right now, to check what it looks like."""
+        try:
+            await aguard(notifier.send_now("Summary on request\n" + notifier.summary()))
+        except RuntimeError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return {"ok": True}
+
     @app.get("/api/export/trades.csv")
     def export_trades(bot_id: str | None = None) -> Response:
         """Every fill, oldest first, for spreadsheets and tax tools."""

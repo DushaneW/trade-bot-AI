@@ -1327,7 +1327,7 @@ const views = {
           <div class="field"><span>Tell me about</span><div class="toggles">${Object.entries(n.event_labels).map(([k, label]) => `<button type="button" data-ev="${k}" class="${n.events[k] ? "on" : ""}">${esc(label)}</button>`).join("")}</div></div>
           <label class="field" style="max-width:240px"><span>Daily summary at (hour)</span><input class="input num" name="summary_hour" type="number" min="0" max="23" step="1" value="${n.summary_hour}"><small>Uses this computer's clock.</small></label>
           ${n.last_error ? `<div class="hint bad">Last delivery failed: ${esc(n.last_error)}</div>` : ""}
-          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="ntTest">Send a test</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="ntTest">Send a test</button><button class="btn" type="button" id="ntSummary">Send the summary now</button>
             ${n.telegram.configured ? `<button class="btn danger" type="button" id="ntClearTg">Remove Telegram</button>` : ""}${n.discord.configured ? `<button class="btn danger" type="button" id="ntClearDc">Remove Discord</button>` : ""}</div>
         </form>
 
@@ -1371,6 +1371,9 @@ const views = {
         if (f.get("telegram_token")) body.telegram_token = f.get("telegram_token");
         if (f.get("discord_webhook")) body.discord_webhook = f.get("discord_webhook");
         try { n = await api("/api/notify", { method: "POST", body }); toast("Saved"); render(); } catch (err) { toast(err.message, true); }
+      });
+      $("#ntSummary", el).addEventListener("click", async () => {
+        try { await api("/api/notify/summary", { method: "POST" }); toast("Summary sent"); } catch (err) { toast(err.message, true); }
       });
       $("#ntTest", el).addEventListener("click", async () => {
         try { await api("/api/notify/test", { method: "POST" }); toast("Test message sent"); } catch (err) { toast(err.message, true); }
