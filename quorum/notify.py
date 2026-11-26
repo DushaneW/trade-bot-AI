@@ -238,6 +238,17 @@ class Notifier:
             lines.append("The council is stopped.")
         return "\n".join(lines)
 
+    def positions(self) -> str:
+        """Every open position with its result so far and the stop protecting it."""
+        lines = []
+        for b in self.engine.overview()["bots"]:
+            for key, p in (b.get("positions") or {}).items():
+                result = (p["price"] - p["avg_price"]) * p["qty"]
+                stop = f", exchange stop at {p['stop_price']:.6g}" if p.get("stop_price") else ", no exchange stop"
+                lines.append(f"{b['name']}: {p['qty']:.6g} {key.split(':', 1)[1]} bought at {p['avg_price']:.6g}, "
+                             f"now {p['price']:.6g} ({result:+,.2f}){stop}")
+        return "\n".join(lines) if lines else "No open positions."
+
     async def _summary_loop(self) -> None:
         while True:
             await asyncio.sleep(60)
@@ -311,6 +322,8 @@ class Notifier:
             else:
                 self.engine.start_council()
                 self.lead.say("Started from Telegram.")
+        elif word == "/positions":
+            await self._reply(chat, self.positions())
         elif word == "/stop":
             if not self.engine.running:
                 await self._reply(chat, "Already stopped.")
@@ -320,6 +333,7 @@ class Notifier:
             self.lead.say("Stopped from Telegram." + (" Every position was closed." if close else ""))
         else:
             await self._reply(chat, "/status  how the team is doing\n"
+                                    "/positions  what is held, and where its stop is\n"
                                     "/start  let the council trade\n"
                                     "/stop  stop, keep positions and their stop losses\n"
                                     "/stop close  stop and sell everything")

@@ -90,3 +90,15 @@ def test_tokens_and_webhooks_are_validated(notifier):
     with pytest.raises(ConfigError):
         notifier.update({"discord_webhook": "https://example.com/hook"})
     assert notifier.update({"summary_hour": 99})["summary_hour"] == 23
+
+
+async def test_positions_lists_holdings_with_their_stops(notifier, team):
+    from quorum.models import Side
+
+    engine, acc = team
+    assert notifier.positions() == "No open positions."
+    rider = next(b for b in engine.bots.values() if b.config["strategy"] == "trend_rider")
+    key = f"{acc.id}:ETH/USDT"
+    await engine._execute(rider, key, Side.BUY, 60 / engine.prices[key], "test")
+    text = notifier.positions()
+    assert text.startswith("Rider: ") and "ETH/USDT" in text and "exchange stop at" in text
