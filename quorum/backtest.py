@@ -27,8 +27,8 @@ import itertools
 import logging
 import math
 import time
-from dataclasses import dataclass, field
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -88,6 +88,12 @@ class Tape:
         return Series(high, low, close, volume)
 
 
+def _ohlcv(candles: list[Candle]) -> tuple[np.ndarray, ...]:
+    """Open, high, low, close and volume as float arrays."""
+    rows = [(c.open, c.high, c.low, c.close, c.volume) for c in candles]
+    return tuple(np.array(col, dtype=float) for col in zip(*rows, strict=True))
+
+
 def _align(history: dict[str, list[Candle]]) -> tuple[list[int], dict[str, list[Candle]]]:
     """Keep only timestamps every symbol has, so multi-market traders see one clock."""
     common = set.intersection(*(set(c.ts for c in cs) for cs in history.values()))
@@ -104,8 +110,7 @@ def record(spec: BacktestSpec, history: dict[str, list[Candle]], progress: Progr
         raise ValueError(f"Only {n} bars of shared history; need at least {WARMUP + 20}")
     analysts = {k: ANALYSTS[k]() for k in spec.analysts
                 if k in ANALYSTS and spec.market.value in ANALYSTS[k].markets and not ANALYSTS[k].needs_extras}
-    arrays = {k: tuple(np.array(x, dtype=float) for x in zip(*[(c.open, c.high, c.low, c.close, c.volume) for c in cs], strict=True))
-              for k, cs in data.items()}
+    arrays = {k: _ohlcv(cs) for k, cs in data.items()}
     tape = Tape(ts, list(data), arrays, [{} for _ in range(n)], [{} for _ in range(n)], [{} for _ in range(n)],
                 Council(), analysts, ts[1] - ts[0])
     corr: dict[tuple[str, str], float] = {}
@@ -194,7 +199,8 @@ def simulate(spec: BacktestSpec, tape: Tape, start: int | None = None, end: int 
             worst = arrays[key][2][i] if pos.qty > 0 else arrays[key][1][i]
             hit = risk.stop_triggered(ledger, limits, key, worst)
             if hit:
-                stop_px = pos.avg_price * (1 - limits.stop_loss_pct) if pos.qty > 0 else pos.avg_price * (1 + limits.stop_loss_pct)
+                side = 1 if pos.qty > 0 else -1
+                stop_px = pos.avg_price * (1 - side * limits.stop_loss_pct)
                 px = min(stop_px, opens[key]) if pos.qty > 0 else max(stop_px, opens[key])  # gaps fill worse
                 fill(key, Side.SELL if pos.qty > 0 else Side.BUY, abs(pos.qty), px, hit, t)
 
@@ -236,7 +242,8 @@ def simulate(spec: BacktestSpec, tape: Tape, start: int | None = None, end: int 
 
     # Mark open positions at the final close; report them rather than pretending they closed.
     final_close = {k: arrays[k][3][end - 1] for k in keys}
-    hold_curve = [(t, sum(hold_qty[k] * arrays[k][3][start + j] for k in keys)) for j, (t, _) in enumerate(equity_curve)]
+    hold_curve = [(t, sum(hold_qty[k] * arrays[k][3][start + j] for k in keys))
+                  for j, (t, _) in enumerate(equity_curve)]
     result = _metrics(spec, equity_curve, hold_curve, trades, ledger.fees, ledger.equity(final_close),
                       exposure_bars, tape.bar_ms)
     result.update(

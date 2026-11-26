@@ -8,8 +8,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
 from .models import now_ms
 
