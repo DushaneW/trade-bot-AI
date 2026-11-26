@@ -5,7 +5,7 @@ switch before it reaches a broker. Bots cannot bypass this.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 from .ledger import Ledger
 from .models import Market, Side
