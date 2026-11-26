@@ -1,0 +1,21 @@
+name: Idea or feature request
+description: Something Quorum should do
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The situation and what gets in your way. A real example helps more than a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+  - type: checkboxes
+    id: plugin
+    attributes:
+      label: Plugins
+      options:
+        - label: This is a new analyst or trader, which could also start as a plugin in `strategies/`

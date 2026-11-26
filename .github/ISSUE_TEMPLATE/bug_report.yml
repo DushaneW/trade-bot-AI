@@ -1,0 +1,42 @@
+name: Bug report
+description: Something does not work the way it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste API keys, secrets, passwords or the contents of `data/` here.
+        If the bug could let someone move or see your money, report it privately instead (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Messages or logs
+      description: The text of any error in the dashboard, and the last lines of the terminal window. Remove anything private.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Quorum version
+      description: Shown at the top of Settings, or run `quorum --version`.
+  - type: dropdown
+    id: venue
+    attributes:
+      label: Exchange or broker
+      options: [Binance, Bybit, OKX, Kraken, Coinbase, KuCoin, Bitget, Gate.io, MEXC, Alpaca, OANDA, Not related]
+  - type: dropdown
+    id: testnet
+    attributes:
+      label: Testnet or real account
+      options: [Testnet or practice account, Real account, Not related]
+  - type: dropdown
+    id: os
+    attributes:
+      label: How you run Quorum
+      options: [Windows, macOS, Linux, Docker]
