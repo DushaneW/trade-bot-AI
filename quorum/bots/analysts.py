@@ -133,7 +133,8 @@ class VolumeAnalyst(Analyst):
     key = "volume"
     title = "Volume"
     persona = "Tide"
-    summary = "Checks whether volume confirms the move. Big volume behind a move means conviction; a move on thin volume is suspect."
+    summary = ("Checks whether volume confirms the move. Big volume behind a move means conviction; "
+               "a move on thin volume is suspect.")
     defaults = {"window": 50, "move": 5}
 
     def read(self, s: Series) -> Reading | None:
@@ -148,7 +149,8 @@ class VolumeAnalyst(Analyst):
             return Reading("flow", sign * _clip((surge - 1) / 2, 0, 1), _clip(surge / 3, 0.3, 1),
                            f"Volume {surge:.1f}x normal behind a {move:+.2%} move")
         if surge < 0.6 and abs(move) > 0:
-            return Reading("flow", -sign * 0.3, 0.35, f"Move of {move:+.2%} on thin volume ({surge:.1f}x), weak conviction")
+            return Reading("flow", -sign * 0.3, 0.35,
+                           f"Move of {move:+.2%} on thin volume ({surge:.1f}x), weak conviction")
         return Reading("flow", 0.0, 0.2, f"Volume normal ({surge:.1f}x)")
 
 
@@ -156,7 +158,8 @@ class RegimeAnalyst(Analyst):
     key = "regime"
     title = "Regime"
     persona = "Compass"
-    summary = "Measures how clean the price path is. Clean paths favour trend followers; noisy chop favours mean reversion."
+    summary = ("Measures how clean the price path is. Clean paths favour trend followers; "
+               "noisy chop favours mean reversion.")
     defaults = {"window": 30}
 
     def read(self, s: Series) -> Reading:
@@ -172,7 +175,8 @@ class StructureAnalyst(Analyst):
     key = "structure"
     title = "Structure"
     persona = "Mason"
-    summary = "Maps support and resistance from the recent range. Near support leans up, pressed against resistance leans down."
+    summary = ("Maps support and resistance from the recent range. Near support leans up, "
+               "pressed against resistance leans down.")
     defaults = {"window": 120}
 
     def read(self, s: Series) -> Reading | None:
@@ -205,9 +209,11 @@ class DivergenceAnalyst(Analyst):
         p_old, p_new = s.close[-w:-half], s.close[-half:]
         r_old, r_new = r[-w:-half], r[-half:]
         if p_new.max() > p_old.max() and r_new.max() < r_old.max() - 3:
-            return Reading("momentum", -0.6, 0.6, f"Bearish divergence: higher high, RSI {r_new.max():.0f} vs {r_old.max():.0f}")
+            return Reading("momentum", -0.6, 0.6,
+                           f"Bearish divergence: higher high, RSI {r_new.max():.0f} vs {r_old.max():.0f}")
         if p_new.min() < p_old.min() and r_new.min() > r_old.min() + 3:
-            return Reading("momentum", 0.6, 0.6, f"Bullish divergence: lower low, RSI {r_new.min():.0f} vs {r_old.min():.0f}")
+            return Reading("momentum", 0.6, 0.6,
+                           f"Bullish divergence: lower low, RSI {r_new.min():.0f} vs {r_old.min():.0f}")
         return Reading("momentum", 0.0, 0.15, "No divergence")
 
 
@@ -215,7 +221,8 @@ class RelativeStrengthAnalyst(Analyst):
     key = "relative"
     title = "Relative Strength"
     persona = "Ranker"
-    summary = "Ranks every watched market by recent return. Money tends to keep flowing to leaders and away from laggards."
+    summary = ("Ranks every watched market by recent return. Money tends to keep flowing to leaders "
+               "and away from laggards.")
     defaults = {"lookback": 40}
 
     def read(self, s: Series) -> Reading | None:  # pragma: no cover - cross-market only
@@ -295,7 +302,8 @@ class OrderBookAnalyst(Analyst):
     title = "Order Book"
     persona = "Depth"
     summary = ("Weighs resting buy orders against sell orders near the price. A heavy bid side leans up, a heavy "
-               "ask side leans down. Books can be spoofed, so it speaks softly and the council learns how far to trust it.")
+               "ask side leans down. Books can be spoofed, so it speaks softly and the council learns "
+               "how far to trust it.")
     defaults = {"threshold": 0.2}
     markets = ("crypto",)
     needs_extras = True
