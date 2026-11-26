@@ -16,6 +16,7 @@ and a lead called the Chair keeps you in the loop, on your screen or your phone.
 ![Linux](https://img.shields.io/badge/Linux-supported-f0883e?style=flat-square&logo=linux&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-4cc38a?style=flat-square)
+[![CI](https://github.com/DushaneW/trade-bot-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/DushaneW/trade-bot-AI/actions/workflows/ci.yml)
 
 [Install](#install) &nbsp;·&nbsp; [First run](#the-first-five-minutes) &nbsp;·&nbsp; [How it works](#how-it-works) &nbsp;·&nbsp; [Safety](#keeping-your-money-safe) &nbsp;·&nbsp; [Backtesting](#testing-ideas-on-old-data) &nbsp;·&nbsp; [Phone](#on-your-phone) &nbsp;·&nbsp; [24/7](#running-it-around-the-clock) &nbsp;·&nbsp; [FAQ](#questions-people-ask)
 
@@ -422,6 +423,8 @@ quorum/
 ├── run.py                 start it without the launchers
 ├── Dockerfile · docker-compose.yml
 ├── strategies/            your own analysts and traders
+├── tests/                 one file per module, all on the simulator
+├── docs/                  architecture.md, strategies.md
 └── quorum/
     ├── engine.py          prices → analysts → vote → traders → risk → orders
     ├── lead.py            the Chair
@@ -437,10 +440,21 @@ quorum/
     └── web/               the dashboard
 ```
 
+To work on Quorum itself:
+
+```bash
+pip install -e ".[dev]"
+ruff check quorum tests strategies
+pytest -q
+```
+
+The tests need no keys and no network. [docs/architecture.md](docs/architecture.md) follows one candle from the
+exchange to an order, and [CONTRIBUTING.md](CONTRIBUTING.md) has the house rules.
+
 **Your own analyst or trader** goes in the `strategies` folder, no changes to Quorum needed. Copy
-`strategies/_example_analyst.py` to a name without the underscore, edit it and restart. A new analyst joins
-every existing team and gets scored like the others, so a bad idea simply loses its vote. A new trader appears
-in the hiring menu and in backtests. Settings lists what loaded and any file that failed. Plugins are plain
+`strategies/_example_analyst.py` to a name without the underscore, edit it and restart, or follow
+[docs/strategies.md](docs/strategies.md). A new analyst joins every existing team and gets scored like the
+others, so a bad idea simply loses its vote. A new trader appears in the hiring menu and in backtests. Settings lists what loaded and any file that failed. Plugins are plain
 Python with full access to your computer, so only use files you have read.
 
 New exchange? Implement the methods in `quorum/connectors/base.py`.
