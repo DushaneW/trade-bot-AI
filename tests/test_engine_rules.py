@@ -56,3 +56,40 @@ async def test_stop_losses_still_work_while_the_council_is_stopped(team):
     await engine._guard_open_positions(acc)
     assert not bot.ledger.position(key).is_open
     assert engine.store.fills(bot.id)[0]["reason"].startswith("Stop loss")
+
+
+async def test_changing_the_profile_resets_limits_and_size(team):
+    engine, _ = team
+    bot = trader(engine)
+    engine.update_bot(bot.id, {"profile": "careful"})
+    assert bot.limits.stop_loss_pct == 0.03 and bot.size_mult == 0.7
+    assert engine.bot_view(bot)["profile"] == "careful"
+    with pytest.raises(ConfigError, match="Unknown risk profile"):
+        engine.update_bot(bot.id, {"profile": "yolo"})
+
+
+async def test_budget_changes_move_cash_but_never_below_open_positions(team):
+    engine, acc = team
+    bot, _ = await hold(engine, acc, money=120)
+    cash = bot.ledger.cash
+    engine.update_bot(bot.id, {"budget": 250})
+    assert bot.ledger.cash == pytest.approx(cash + 50)
+    with pytest.raises(ConfigError, match="already in open positions"):
+        engine.update_bot(bot.id, {"budget": 100})
+
+
+async def test_a_trader_holding_positions_cannot_be_deleted(team):
+    engine, acc = team
+    bot, _ = await hold(engine, acc)
+    with pytest.raises(ConfigError, match="still holds positions"):
+        engine.delete_bot(bot.id)
+    await engine.close_positions(bot.id)
+    engine.delete_bot(bot.id)
+    assert bot.id not in engine.bots
+
+
+async def test_a_second_bot_of_the_same_kind_gets_a_numbered_name(team):
+    engine, _ = team
+    bot = engine.create_bot({"strategy": "momentum", "account_id": next(iter(engine.accounts)),
+                             "symbols": ["BTC/USDT"]})
+    assert bot.config["name"] == "Tempo 2"
