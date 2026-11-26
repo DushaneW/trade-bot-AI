@@ -106,3 +106,34 @@ def test_accounts_in_use_cannot_be_removed(with_account):
     c.post("/api/bots", json={"strategy": "momentum", "account_id": acc["id"], "symbols": ["BTC/USDT"]})
     r = c.delete(f"/api/accounts/{acc['id']}")
     assert r.status_code == 400 and "bots using this account" in r.json()["detail"]
+
+
+def test_backtest_requests_are_validated_before_running(with_account):
+    c, acc = with_account
+    base = {"strategy": "breakout", "account_id": acc["id"], "symbols": ["BTC/USDT"], "bars": 1000}
+    cases = [({**base, "strategy": "momentum"}, "trader strategy"),
+             ({**base, "account_id": "nope"}, "Pick an account"),
+             ({**base, "symbols": []}, "at least one market"),
+             ({**base, "bars": 10}, "between"),
+             ({**base, "budget": -5}, "above zero"),
+             ({**base, "bars": 500, "walk_forward": True}, "Walk-forward needs")]
+    for body, message in cases:
+        r = c.post("/api/backtests", json=body)
+        assert r.status_code == 400 and message in r.json()["detail"], body
+
+
+def test_a_backtest_runs_in_the_background_and_reports_back(with_account):
+    import time
+
+    c, acc = with_account
+    run = c.post("/api/backtests", json={"strategy": "breakout", "account_id": acc["id"],
+                                         "symbols": ["BTC/USDT"], "bars": 300}).json()
+    assert run["status"] == "queued"
+    for _ in range(60):
+        done = c.get(f"/api/backtests/{run['id']}").json()
+        if done["status"] in ("done", "failed"):
+            break
+        time.sleep(0.25)
+    assert done["status"] == "done", done.get("error")
+    assert set(done["summary"]) == {"return", "buy_hold_return", "max_drawdown", "trades", "win_rate", "sharpe"}
+    assert c.get("/api/backtests").json()[0]["id"] == run["id"]
