@@ -121,3 +121,57 @@ async def test_positions_and_stops_survive_a_restart(team, tmp_path, bus):
     assert restored.qty == pytest.approx(pos.qty) and restored.stop_id == pos.stop_id
     assert again.running  # the owner had started the council before the restart
     await again.stop()
+
+
+async def restart_with(tmp_path, bus, mutate):
+    """Edit the saved bots the way an older version or a removed plugin would leave them, then start again."""
+    from quorum.engine import Engine
+    from quorum.security import Vault
+    from quorum.storage import Store
+
+    store = Store(tmp_path / "q.db")
+    for cfg in store.bots():
+        mutate(cfg)
+        store.save_bot(cfg["id"], cfg)
+    eng = Engine(store, Vault(tmp_path), bus)
+    await eng.start()
+    eng._task.cancel()
+    return eng
+
+
+async def test_old_paper_traders_come_back_paused_with_a_note(team, tmp_path, bus):
+    engine, _ = team
+    engine._persist()
+
+    def to_paper(cfg):
+        if "budget" in cfg:
+            cfg["mode"] = "paper"
+    again = await restart_with(tmp_path, bus, to_paper)
+    traders = [b for b in again.bots.values() if b.is_trader]
+    assert traders and all(not b.config["enabled"] for b in traders)
+    assert all("Paper trading was removed" in again.last_said[b.id]["text"] for b in traders)
+    await again.stop()
+
+
+async def test_bots_of_a_missing_plugin_are_skipped_not_fatal(team, tmp_path, bus):
+    engine, _ = team
+    engine._persist()
+    victim = next(b for b in engine.bots.values() if b.config["strategy"] == "momentum")
+
+    def unplug(cfg):
+        if cfg["id"] == victim.id:
+            cfg["strategy"] = "gone_plugin"
+    again = await restart_with(tmp_path, bus, unplug)
+    assert victim.id not in again.bots
+    assert again.skipped == [victim.config["name"]]
+    await again.stop()
+
+
+async def test_analysts_added_later_join_an_existing_team(team, tmp_path, bus):
+    engine, _ = team
+    engine._persist()
+    dropped = next(b for b in engine.bots.values() if b.config["strategy"] == "order_book")
+    engine.store.delete_bot(dropped.id)
+    again = await restart_with(tmp_path, bus, lambda cfg: None)
+    assert "order_book" in {b.config["strategy"] for b in again.bots.values()}
+    await again.stop()
