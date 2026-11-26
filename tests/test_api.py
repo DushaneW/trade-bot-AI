@@ -61,3 +61,10 @@ def test_data_folder_can_be_chosen(tmp_path, monkeypatch):
         assert c.get("/api/state").status_code == 200
     assert (tmp_path / "elsewhere" / "quorum.db").exists()
     assert (tmp_path / "elsewhere" / "secret.key").exists()
+
+
+def test_health_answers_without_a_password_and_tells_nothing_else(tmp_path, monkeypatch):
+    from quorum import __version__
+
+    with client(tmp_path, monkeypatch, password="s3cret") as c:
+        assert c.get("/api/health").json() == {"ok": True, "version": __version__}

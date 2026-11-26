@@ -16,7 +16,7 @@ from pathlib import Path
 
 COOKIE = "quorum_session"
 MAX_AGE = 30 * 86_400
-OPEN_PATHS = {"/login", "/static/favicon.svg", "/static/app.css"}
+OPEN_PATHS = {"/login", "/api/health", "/static/favicon.svg", "/static/app.css"}
 
 
 class Gate:

@@ -18,5 +18,5 @@ USER quorum
 VOLUME ["/data"]
 EXPOSE 8420
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8420/login', timeout=4)"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8420/api/health', timeout=4)"
 CMD ["quorum", "--host", "0.0.0.0", "--port", "8420", "--no-browser"]

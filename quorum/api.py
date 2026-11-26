@@ -20,6 +20,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from . import __version__
 from .auth import COOKIE, LOGIN_PAGE, MAX_AGE, OPEN_PATHS, Gate
 from .backtest import BacktestRunner
 from .bots import catalog
@@ -130,6 +131,11 @@ def create_app(data_dir: Path | None = None, strategies_dir: Path | None = None)
         resp = RedirectResponse("/login" if gate.enabled else "/", status_code=303)
         resp.delete_cookie(COOKIE)
         return resp
+
+    @app.get("/api/health")
+    def health() -> dict:
+        """For Docker and uptime monitors. Open without a password, so it says nothing about money."""
+        return {"ok": True, "version": __version__}
 
     @app.get("/api/state")
     def state() -> dict:
