@@ -23,13 +23,24 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def refuse_unprotected(host: str, password: str | None) -> str | None:
+    """Why Quorum must not start on this host, or None when it may."""
+    if host in LOCAL_HOSTS or password:
+        return None
+    return (f"Refusing to listen on {host} without a password: anyone who can reach this port could "
+            "trade with your money. Set QUORUM_PASSWORD, or keep the default 127.0.0.1.")
+
+
 def main() -> None:
     args = parser().parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
-    if args.host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("QUORUM_PASSWORD"):
-        sys.exit(f"Refusing to listen on {args.host} without a password: anyone who can reach this port could "
-                 "trade with your money. Set QUORUM_PASSWORD, or keep the default 127.0.0.1.")
+    problem = refuse_unprotected(args.host, os.environ.get("QUORUM_PASSWORD"))
+    if problem:
+        sys.exit(problem)
     if not args.no_browser:
         webbrowser.open(f"http://{args.host}:{args.port}")
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")
