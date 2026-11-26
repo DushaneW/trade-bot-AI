@@ -67,7 +67,7 @@ class Reputation:
                 "accuracy": self.accuracy, "weight": self.weight}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Reputation":
+    def from_dict(cls, d: dict) -> Reputation:
         return cls(d.get("hits", 0), d.get("calls", 0), list(d.get("history", [])))
 
 

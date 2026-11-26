@@ -45,7 +45,7 @@ def _money(v: float) -> str:
 
 
 class Notifier:
-    def __init__(self, engine: "Engine", lead: "Lead", store: "Store", vault: "Vault", bus: "Bus") -> None:
+    def __init__(self, engine: Engine, lead: Lead, store: Store, vault: Vault, bus: Bus) -> None:
         self.engine, self.lead, self.store, self.vault = engine, lead, store, vault
         self.http = httpx.AsyncClient(timeout=35)
         self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=200)

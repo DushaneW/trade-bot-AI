@@ -30,7 +30,7 @@ class Series:
     def __len__(self) -> int:
         return len(self.close)
 
-    def tail(self, n: int) -> "Series":
+    def tail(self, n: int) -> Series:
         """The last n bars (views, not copies)."""
         if n >= len(self.close):
             return self

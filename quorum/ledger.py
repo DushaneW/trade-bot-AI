@@ -90,7 +90,7 @@ class Ledger:
         }
 
     @classmethod
-    def from_state(cls, state: dict) -> "Ledger":
+    def from_state(cls, state: dict) -> Ledger:
         led = cls(float(state["budget"]))
         led.cash = float(state["cash"])
         led.realized = float(state.get("realized", 0))

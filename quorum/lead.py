@@ -63,7 +63,7 @@ def _fingerprint(items: list[dict]) -> str:
 
 
 class Lead:
-    def __init__(self, engine: "Engine", store: "Store", vault: "Vault", bus: "Bus") -> None:
+    def __init__(self, engine: Engine, store: Store, vault: Vault, bus: Bus) -> None:
         self.engine, self.store, self.vault, self.bus = engine, store, vault, bus
         self._task: asyncio.Task | None = None
         self._last_fingerprint = ""

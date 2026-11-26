@@ -55,7 +55,7 @@ KEY_HELP = {
 
 
 class Onboarding:
-    def __init__(self, lead: "Lead", engine: "Engine", store: "Store") -> None:
+    def __init__(self, lead: Lead, engine: Engine, store: Store) -> None:
         self.lead, self.engine, self.store = lead, engine, store
 
     # ------------------------------------------------------------------ state

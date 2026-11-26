@@ -27,7 +27,7 @@ class RiskLimits:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict | None) -> "RiskLimits":
+    def from_dict(cls, data: dict | None) -> RiskLimits:
         known = cls.__dataclass_fields__
         return cls(**{k: float(v) for k, v in (data or {}).items() if k in known})
 
