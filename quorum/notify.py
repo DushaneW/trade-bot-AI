@@ -232,6 +232,16 @@ class Notifier:
             top = max(scored, key=lambda b: b["reputation"]["accuracy"])
             lines.append(f"Most accurate analyst: {top['name']}, right {top['reputation']['accuracy']:.0%} "
                          f"of {top['reputation']['calls']} calls.")
+        since = (time.time() - 86_400) * 1000
+        recent = [f for f in self.store.fills(limit=5000) if f["ts"] >= since]
+        if recent:
+            fees = sum(f["fee"] for f in recent)
+            closed = [f for f in recent if f.get("pnl")]
+            result = sum(f["pnl"] for f in closed)
+            lines.append(f"Last 24 hours: {len(recent)} order{'s' if len(recent) != 1 else ''}, "
+                         f"{len(closed)} closed for {result:+,.2f}, fees {_money(fees)}.")
+        else:
+            lines.append("No orders in the last 24 hours.")
         held = [f"{k.split(':', 1)[1]} ({b['name']})" for b in traders for k in b["positions"]]
         lines.append("Holding: " + ", ".join(held) + "." if held else "No open positions.")
         if not ov["running"]:

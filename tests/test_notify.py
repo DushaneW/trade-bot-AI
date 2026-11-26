@@ -102,3 +102,16 @@ async def test_positions_lists_holdings_with_their_stops(notifier, team):
     await engine._execute(rider, key, Side.BUY, 60 / engine.prices[key], "test")
     text = notifier.positions()
     assert text.startswith("Rider: ") and "ETH/USDT" in text and "exchange stop at" in text
+
+
+async def test_summary_counts_the_last_24_hours(notifier, team):
+    from quorum.models import Side
+
+    engine, acc = team
+    assert "No orders in the last 24 hours." in notifier.summary()
+    rider = next(b for b in engine.bots.values() if b.config["strategy"] == "trend_rider")
+    key = f"{acc.id}:BTC/USDT"
+    await engine._execute(rider, key, Side.BUY, 60 / engine.prices[key], "in")
+    await engine._execute(rider, key, Side.SELL, rider.ledger.position(key).qty, "out")
+    line = next(x for x in notifier.summary().split("\n") if x.startswith("Last 24 hours"))
+    assert "2 orders, 1 closed for" in line and "fees" in line
