@@ -82,3 +82,38 @@ def test_kill_switch_refuses_everything():
     risk.halted = True
     v = risk.review(holding(1, 10), RiskLimits(), Market.CRYPTO, KEY, Side.SELL, 1, 10, 100)
     assert not v.approved and "Kill switch" in v.reason
+
+
+def test_small_ideas_are_raised_to_the_exchange_minimum_when_affordable():
+    limits = RiskLimits(min_order_value=10)
+    v = review(Ledger(25.0), qty=0.2, price=10, limits=limits)  # 2 wanted, 10 is the minimum
+    assert v.qty * 10 == pytest.approx(10.2) and "minimum" in v.reason
+
+
+def test_minimum_is_skipped_when_the_budget_cannot_cover_it():
+    v = review(Ledger(8.0), qty=0.2, price=10, limits=RiskLimits(min_order_value=10))
+    assert not v.approved and "can't cover" in v.reason
+
+
+def test_correlated_holdings_trim_a_new_entry():
+    led = holding(3, 10, budget=100)  # 30 in BTC already
+    limits = RiskLimits(max_position_pct=0.5, max_correlated_pct=0.6)
+    v = RiskManager().review(led, limits, Market.CRYPTO, OTHER, Side.BUY, 5, 10, 100, correlated=30 * 0.9)
+    assert v.qty * 10 == pytest.approx(60 - 27)
+    assert "move with this one" in v.reason
+
+
+def test_profiles_never_make_the_correlation_cap_tighter_than_one_position():
+    for name, p in PROFILES.items():
+        assert p["limits"].max_correlated_pct >= p["limits"].max_position_pct, name
+
+
+def test_conviction_scales_between_three_quarters_and_five_quarters():
+    assert conviction(0) == 0.75
+    assert conviction(-1) == conviction(1) == 1.25
+    assert conviction(5) == 1.25
+
+
+def test_limits_from_saved_settings_ignore_unknown_keys():
+    limits = RiskLimits.from_dict({"stop_loss_pct": "0.02", "made_up": 1})
+    assert limits.stop_loss_pct == 0.02 and limits.max_correlated_pct == 0.8
