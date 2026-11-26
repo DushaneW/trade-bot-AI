@@ -54,3 +54,23 @@ def test_atr_counts_gaps_from_the_previous_close():
     high, low = close + 0.5, close - 0.5
     atr = ta.atr(high, low, close, n=5)
     assert atr[30] > 1.0  # the jump from 100 to 110 is part of the true range
+
+
+def test_zscore_of_a_flat_series_is_zero():
+    assert ta.zscore(np.full(30, 5.0)) == 0.0
+
+
+def test_zscore_is_negative_after_a_drop():
+    close = np.array([100.0] * 25 + [90.0])
+    assert ta.zscore(close, 20) < -2
+
+
+def test_efficiency_ratio_tells_a_straight_line_from_noise():
+    assert ta.efficiency_ratio(np.linspace(1, 2, 50)) == pytest.approx(1.0)
+    assert ta.efficiency_ratio(100 + np.tile([1.0, -1.0], 30)) < 0.1
+    assert ta.efficiency_ratio(np.full(40, 3.0)) == 0.0
+
+
+def test_log_returns_have_one_fewer_value():
+    r = ta.log_returns(np.array([100.0, 110.0, 99.0]))
+    assert r.tolist() == pytest.approx([np.log(1.1), np.log(0.9)])
