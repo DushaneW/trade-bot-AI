@@ -124,6 +124,8 @@ All the launchers accept the same options:
 | `--port 9000` | Use another port. The default is `8420`. |
 | `--no-browser` | Don't open the browser automatically. |
 | `--host 0.0.0.0` | Listen on your network. Quorum refuses unless `QUORUM_PASSWORD` is set. |
+| `--data ~/quorum-data` | Keep the database and keys somewhere else. Same as setting `QUORUM_DATA`. |
+| `--version` | Print the version and exit. |
 
 The dashboard lives at `http://127.0.0.1:8420`.
 
@@ -367,7 +369,11 @@ docker compose up -d
 ```
 
 The first build takes a minute or two. After that Quorum restarts by itself after a crash or a reboot, and
-keeps its data in `./data` next to the compose file. The dashboard asks for that password.
+keeps its data in `./data` next to the compose file. The dashboard asks for that password, and after five wrong
+tries from one address it makes that address wait 15 minutes.
+
+`/api/health` answers without a password and says only that Quorum is up and which version it runs, so an
+uptime monitor can watch it.
 
 | | |
 | --- | --- |
