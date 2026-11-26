@@ -19,6 +19,8 @@ anything else.
   exchanges do not report this; the setup tells you to switch withdrawals off yourself.
 - **Local by default.** The dashboard listens on `127.0.0.1` only. Quorum refuses to listen on a network address
   unless `QUORUM_PASSWORD` is set.
+- **Password guessing is slowed down.** Every wrong password costs a second, and after five wrong passwords from
+  one address that address waits 15 minutes. Changing the password signs every browser out.
 - **Telegram commands** are accepted only from the one chat that sent the pairing code shown in Settings.
 - **Plugins** in `strategies/` are ordinary Python with full access to your computer. Only install files you have
   read.
