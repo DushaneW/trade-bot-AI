@@ -92,3 +92,23 @@ def test_correlations_need_two_markets_and_survive_flat_prices():
     assert ta.correlations({"a": np.arange(1.0, 50.0)}) == {}
     corr = ta.correlations({"a": np.full(50, 1.0), "b": np.arange(1.0, 51.0)})
     assert corr[("a", "b")] == 0.0  # a flat market has no defined correlation; treat it as unrelated
+
+
+def test_arrays_split_candles_into_columns():
+    from quorum.models import Candle
+
+    candles = [Candle(i, 1.0, 2.0 + i, 0.5, 1.5 + i, 10.0 * i) for i in range(3)]
+    high, low, close, volume = ta.arrays(candles)
+    assert high.tolist() == [2.0, 3.0, 4.0]
+    assert low.tolist() == [0.5] * 3
+    assert close.tolist() == [1.5, 2.5, 3.5]
+    assert volume.tolist() == [0.0, 10.0, 20.0]
+
+
+async def test_simulated_history_reads_like_a_one_minute_chart():
+    from quorum.connectors.sim import SimConnector
+
+    candles = await SimConnector().history("ETH/USDT", 200)
+    gaps = {b.ts - a.ts for a, b in zip(candles, candles[1:], strict=False)}
+    assert len(candles) == 200 and gaps == {60_000}
+    assert all(c.low <= min(c.open, c.close) and c.high >= max(c.open, c.close) for c in candles)
