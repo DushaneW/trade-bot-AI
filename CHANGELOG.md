@@ -4,11 +4,37 @@ What changed for the people running Quorum. Newest first.
 
 ## Unreleased
 
-- A test suite covering indicators, the ledger, risk limits, learning, every analyst and trader, backtests,
-  backup stops, the setup chat, notifications, the API and plugins. It runs on the simulator, without keys.
-- Continuous integration on Linux, Windows and macOS with Python 3.10 and 3.12.
-- The Chair's Claude prompt now knows about each analyst's accuracy per market mood.
-- Contributor docs: a contributing guide, a security policy, an architecture overview and a plugin guide.
+### New
+
+- Ask the Chair *"What are we holding?"* and it lists every open position with its result and its stop.
+- Telegram `/positions` does the same from your phone.
+- The daily summary counts the last 24 hours: orders, closed results and fees. *Send the summary now* in Settings
+  shows what it looks like.
+- When an exchange stops sending prices, the Chair says so and the Accounts page marks the account.
+- Each trader's page shows the fees it has paid.
+- A backtest's trades download as CSV.
+- `quorum --version`, `quorum --data FOLDER`, and the version in Settings with links to release notes and bug
+  reports.
+- `/api/health` for Docker and uptime monitors. The Docker image uses it for its health check.
+
+### Safer
+
+- Five wrong dashboard passwords from one address make that address wait 15 minutes.
+
+### Fixed
+
+- Kraken, Coinbase, KuCoin, Bitget and MEXC were treated as having a testnet, so setup offered a testnet checkbox
+  for them that led to a broken connection. The checkbox now only appears where a testnet exists.
+- The Chair's Claude prompt now mentions each analyst's accuracy per market mood, which it was already given.
+
+### For contributors
+
+- 200+ tests covering indicators, the ledger, risk limits, learning, every analyst and trader, backtests,
+  backup stops, the setup chat, notifications, the API, plugins, and that the README matches the code. They run
+  on the simulator, without keys or network.
+- Continuous integration on Linux, Windows and macOS with Python 3.10 and 3.12, plus a Docker build check.
+- Ruff linting, Dependabot, an editorconfig, issue forms and a pull request checklist.
+- A contributing guide, a security policy, an architecture overview and a plugin guide.
 
 ## 0.2.0 · 25 November 2026
 
