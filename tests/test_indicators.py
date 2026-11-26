@@ -74,3 +74,21 @@ def test_efficiency_ratio_tells_a_straight_line_from_noise():
 def test_log_returns_have_one_fewer_value():
     r = ta.log_returns(np.array([100.0, 110.0, 99.0]))
     assert r.tolist() == pytest.approx([np.log(1.1), np.log(0.9)])
+
+
+def test_correlations_are_symmetric_and_spot_twins():
+    rng = np.random.default_rng(7)
+    base = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 200)))
+    twin = base * 1.5
+    other = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 200)))
+    corr = ta.correlations({"a": base, "b": twin, "c": other})
+    assert corr[("a", "b")] == pytest.approx(1.0)
+    assert corr[("a", "c")] == corr[("c", "a")]
+    assert abs(corr[("a", "c")]) < 0.5
+    assert ("a", "a") not in corr
+
+
+def test_correlations_need_two_markets_and_survive_flat_prices():
+    assert ta.correlations({"a": np.arange(1.0, 50.0)}) == {}
+    corr = ta.correlations({"a": np.full(50, 1.0), "b": np.arange(1.0, 51.0)})
+    assert corr[("a", "b")] == 0.0  # a flat market has no defined correlation; treat it as unrelated
