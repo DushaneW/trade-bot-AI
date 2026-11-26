@@ -50,3 +50,35 @@ def test_trailing_stop_follows_the_peak_and_only_locks_in_gains():
 
 def test_no_stop_without_a_position():
     assert RiskManager().stop_triggered(Ledger(100.0), RiskLimits(), KEY, 1.0) is None
+
+
+def review(led, side=Side.BUY, qty=1.0, price=10.0, equity=None, limits=None, market=Market.CRYPTO, **kw):
+    return RiskManager().review(led, limits or RiskLimits(), market, KEY, side, qty, price,
+                                led.cash if equity is None else equity, **kw)
+
+
+def test_entries_are_capped_by_the_position_limit_and_the_cash():
+    v = review(Ledger(100.0), qty=8, price=10)  # 80 wanted, 50% cap
+    assert v.qty * 10 == pytest.approx(50) and "position size" in v.reason
+    led = Ledger(100.0)
+    led.cash = 20
+    v = review(led, qty=4, price=10, equity=100)
+    assert v.qty * 10 < 20 and "available budget" in v.reason
+
+
+def test_exits_are_always_allowed_but_never_bigger_than_the_position():
+    led = holding(2, 10)
+    v = review(led, side=Side.SELL, qty=5)
+    assert v.qty == 2 and v.reason is None
+
+
+def test_shorting_is_forex_only():
+    assert not review(Ledger(100.0), side=Side.SELL).approved
+    assert review(Ledger(100.0), side=Side.SELL, qty=1, market=Market.FOREX).approved
+
+
+def test_kill_switch_refuses_everything():
+    risk = RiskManager()
+    risk.halted = True
+    v = risk.review(holding(1, 10), RiskLimits(), Market.CRYPTO, KEY, Side.SELL, 1, 10, 100)
+    assert not v.approved and "Kill switch" in v.reason
