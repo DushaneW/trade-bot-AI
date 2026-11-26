@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import webbrowser
+from pathlib import Path
 
 import uvicorn
 
@@ -19,6 +20,8 @@ def parser() -> argparse.ArgumentParser:
                    help="Interface to bind. Keep 127.0.0.1 unless you secure the network yourself.")
     p.add_argument("--port", type=int, default=8420)
     p.add_argument("--no-browser", action="store_true", help="Do not open the dashboard on start")
+    p.add_argument("--data", metavar="FOLDER", help="Where to keep the database and keys "
+                                                   "(default: ./data in a checkout, ~/.quorum when installed)")
     p.add_argument("--version", action="version", version=f"Quorum {__version__}")
     return p
 
@@ -43,7 +46,8 @@ def main() -> None:
         sys.exit(problem)
     if not args.no_browser:
         webbrowser.open(f"http://{args.host}:{args.port}")
-    uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")
+    uvicorn.run(create_app(Path(args.data) if args.data else None), host=args.host, port=args.port,
+                log_level="warning")
 
 
 if __name__ == "__main__":

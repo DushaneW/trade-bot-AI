@@ -57,11 +57,13 @@ CSV_FIELDS = ["time_utc", "trader", "account", "market", "side", "quantity", "pr
               "reason"]
 
 
-def create_app() -> FastAPI:
-    plugins, plugin_errors = load_plugins(STRATEGIES_DIR)  # before the engine mounts bots that may use them
+def create_app(data_dir: Path | None = None, strategies_dir: Path | None = None) -> FastAPI:
+    data_dir = Path(data_dir or DATA)
+    strategies_dir = Path(strategies_dir or STRATEGIES_DIR)
+    plugins, plugin_errors = load_plugins(strategies_dir)  # before the engine mounts bots that may use them
     bus = Bus(history=3000)
-    store, vault = Store(DATA / "quorum.db"), Vault(DATA)
-    gate = Gate(DATA)
+    store, vault = Store(data_dir / "quorum.db"), Vault(data_dir)
+    gate = Gate(data_dir)
     engine = Engine(store, vault, bus)
     lead = Lead(engine, store, vault, bus)
     notifier = Notifier(engine, lead, store, vault, bus)
@@ -132,7 +134,7 @@ def create_app() -> FastAPI:
     @app.get("/api/state")
     def state() -> dict:
         return {**engine.overview(), "setup": lead.onboarding.summary(), "auth": gate.enabled,
-                "plugins": {"loaded": plugins, "errors": plugin_errors, "folder": str(STRATEGIES_DIR)}}
+                "plugins": {"loaded": plugins, "errors": plugin_errors, "folder": str(strategies_dir)}}
 
     @app.post("/api/council")
     async def council(data: dict = Body(...)) -> dict:

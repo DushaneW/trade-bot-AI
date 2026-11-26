@@ -1,19 +1,15 @@
 """The HTTP API through FastAPI's test client, with a throwaway data folder."""
-import importlib
-
 import pytest
 from fastapi.testclient import TestClient
+
+from quorum.api import create_app
 
 FORM = {"Content-Type": "application/x-www-form-urlencoded"}
 
 
 def client(tmp_path, monkeypatch, password=""):
-    monkeypatch.setenv("QUORUM_DATA", str(tmp_path))
-    monkeypatch.setenv("QUORUM_STRATEGIES", str(tmp_path / "strategies"))
     monkeypatch.setenv("QUORUM_PASSWORD", password)
-    import quorum.api as api
-    importlib.reload(api)
-    return TestClient(api.create_app())
+    return TestClient(create_app(tmp_path, tmp_path / "strategies"))
 
 
 @pytest.fixture
@@ -58,3 +54,10 @@ def test_password_protects_pages_api_and_websocket(tmp_path, monkeypatch):
         c.get("/logout")
         c.cookies.clear()
         assert c.get("/api/state").status_code == 401
+
+
+def test_data_folder_can_be_chosen(tmp_path, monkeypatch):
+    with client(tmp_path / "elsewhere", monkeypatch) as c:
+        assert c.get("/api/state").status_code == 200
+    assert (tmp_path / "elsewhere" / "quorum.db").exists()
+    assert (tmp_path / "elsewhere" / "secret.key").exists()
