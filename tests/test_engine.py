@@ -187,3 +187,15 @@ async def test_an_account_without_prices_for_minutes_is_stale(team):
     assert acc.public()["data_age"] >= 600
     acc.last_data = 0
     assert not acc.stale()  # never fetched yet is not an outage
+
+
+async def test_overview_totals_add_up_across_traders(team):
+    engine, acc = team
+    await buy(engine, acc)
+    ov = engine.overview()
+    traders = [b for b in ov["bots"] if b["role"] == "trader"]
+    assert ov["totals"]["traders"] == 2
+    assert ov["totals"]["budget"] == pytest.approx(sum(b["budget"] for b in traders))
+    assert ov["totals"]["equity"] == pytest.approx(sum(b["equity"] for b in traders))
+    assert ov["totals"]["testnet"] is True  # the simulated account counts as practice money
+    assert set(ov["markets"][f"{acc.id}:BTC/USDT"]) >= {"price", "direction", "risk_off", "voices", "regime"}
