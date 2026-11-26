@@ -35,3 +35,26 @@ def test_readme_risk_table_matches_the_profiles(name):
 def test_readme_states_the_correlation_caps_of_every_profile():
     caps = [pct(PROFILES[k]["limits"].max_correlated_pct) for k in ("careful", "balanced", "bold")]
     assert f"{caps[0]}, {caps[1]} or {caps[2]}" in README
+
+
+def test_every_venue_in_setup_has_a_display_name_and_key_help():
+    from quorum.connectors import VENUE_NAMES, VENUES
+    from quorum.onboarding import KEY_HELP
+
+    for venues in VENUES.values():
+        for venue in venues:
+            assert venue in VENUE_NAMES, venue
+            assert KEY_HELP.get(venue), venue
+
+
+def test_every_venue_is_listed_in_the_readme():
+    from quorum.connectors import VENUE_NAMES
+
+    for name in VENUE_NAMES.values():
+        assert name in README, name
+
+
+def test_suggested_markets_exist_for_every_market_type():
+    from quorum.connectors import SUGGESTED_MARKETS, VENUES
+
+    assert set(SUGGESTED_MARKETS) == set(VENUES)
