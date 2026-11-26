@@ -63,3 +63,36 @@ async def test_an_answered_question_cannot_be_answered_again(lead):
     await answer(lead, {"choice": "crypto"})
     with pytest.raises(ConfigError, match="already been answered"):
         await lead.answer_prompt(first["id"], {"choice": "stocks"})
+
+
+async def finished(lead):
+    await walk_to_budget(lead)
+    await answer(lead, {"budget": 300, "confirm": True})
+    await answer(lead, {"choices": ["trend_rider", "breakout"]})
+    await answer(lead, {"choice": "balanced"})
+    await answer(lead, {"choice": "start"})
+
+
+async def test_stop_asks_whether_to_keep_positions(lead, engine):
+    await finished(lead)
+    await lead.ask("stop")
+    prompt = open_prompt(lead)
+    assert prompt["step"] == "stop" and engine.running
+    await answer(lead, {"choice": "keep"})
+    assert not engine.running
+    assert any("keep their stop losses" in m["text"] for m in lead.history(5))
+
+
+async def test_start_and_already_running(lead, engine):
+    await finished(lead)
+    await lead.ask("start")
+    assert any(m["text"] == "The council is already running." for m in lead.history(5))
+
+
+async def test_questions_about_traders_get_a_rule_answer(lead, engine):
+    await finished(lead)
+    await lead.ask("How are my traders doing?")
+    for job in list(lead._jobs):
+        await job
+    reply = lead.history(5)[-1]
+    assert reply["kind"] == "answer" and "traders manage" in reply["text"]
