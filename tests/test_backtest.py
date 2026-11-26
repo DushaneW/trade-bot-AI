@@ -48,3 +48,40 @@ def test_fills_happen_at_the_next_bars_open_with_fees_and_slippage(history):
         slip = SLIPPAGE if t["side"] == "buy" else -SLIPPAGE
         assert t["price"] == pytest.approx(opens[t["symbol"]][t["ts"]] * (1 + slip))
         assert t["fee"] == pytest.approx(t["qty"] * t["price"] * FEE)
+
+
+def test_a_replay_matches_the_record_then_simulate_split(history):
+    whole = run_backtest(spec(), history)
+    parts = simulate(spec(), record(spec(), history))
+    assert whole["return"] == pytest.approx(parts["return"])
+    assert whole["trades"] == parts["trades"]
+
+
+def test_simulating_a_stretch_starts_with_a_fresh_budget(history):
+    tape = record(spec(), history)
+    out = simulate(spec(budget=250), tape, start=400, end=600)
+    assert out["bars"] == 200
+    assert out["equity_curve"][0][1] == pytest.approx(250, rel=0.05)
+
+
+def test_analysts_that_need_live_exchange_data_sit_backtests_out(history):
+    tape = record(spec(), history)
+    assert not {"funding", "open_interest", "order_book"} & set(tape.analysts)
+
+
+def test_walk_forward_tunes_on_one_stretch_and_reports_the_next(history):
+    result = run_walk_forward(spec(), history, folds=3)
+    wf = result["walk_forward"]
+    assert len(wf["folds"]) == 3
+    assert wf["settings_tried"] == len(_grid("breakout")) == 9
+    for fold in wf["folds"]:
+        assert fold["train_start"] < fold["test_start"] < fold["test_end"]
+        assert set(fold["params"]) == {"entry", "exit"}
+    starts = [f["test_start"] for f in wf["folds"]]
+    assert starts == sorted(starts)
+
+
+def test_walk_forward_refuses_a_short_history(history):
+    short = {k: v[: WARMUP + MIN_FOLD_BARS * 2] for k, v in history.items()}
+    with pytest.raises(ValueError, match="Walk-forward needs"):
+        run_walk_forward(spec(), short)
