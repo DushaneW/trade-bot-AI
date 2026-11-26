@@ -104,7 +104,7 @@ def record(spec: BacktestSpec, history: dict[str, list[Candle]], progress: Progr
         raise ValueError(f"Only {n} bars of shared history; need at least {WARMUP + 20}")
     analysts = {k: ANALYSTS[k]() for k in spec.analysts
                 if k in ANALYSTS and spec.market.value in ANALYSTS[k].markets and not ANALYSTS[k].needs_extras}
-    arrays = {k: tuple(np.array(x, dtype=float) for x in zip(*[(c.open, c.high, c.low, c.close, c.volume) for c in cs]))
+    arrays = {k: tuple(np.array(x, dtype=float) for x in zip(*[(c.open, c.high, c.low, c.close, c.volume) for c in cs], strict=True))
               for k, cs in data.items()}
     tape = Tape(ts, list(data), arrays, [{} for _ in range(n)], [{} for _ in range(n)], [{} for _ in range(n)],
                 Council(), analysts, ts[1] - ts[0])
@@ -272,7 +272,7 @@ def _grid(strategy: str) -> list[dict[str, float]]:
     if not tunable:
         return [{}]
     names = list(tunable)
-    return [dict(zip(names, combo)) for combo in itertools.product(*(tunable[n] for n in names))]
+    return [dict(zip(names, combo, strict=True)) for combo in itertools.product(*(tunable[n] for n in names))]
 
 
 def _score(r: dict) -> float:
