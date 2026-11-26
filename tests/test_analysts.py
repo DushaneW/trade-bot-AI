@@ -50,3 +50,32 @@ def test_divergence_spots_a_higher_high_on_weaker_momentum():
 
 def test_divergence_is_quiet_on_a_clean_trend():
     assert read("divergence", trend(120)).direction == 0.0
+
+
+def test_volatility_warns_when_ranges_blow_out():
+    close = np.full(150, 100.0)
+    calm = ANALYSTS["volatility"]().read(series(close, spread=0.001))
+    s = series(close, spread=0.001)
+    s.high[-5:] *= 1.05
+    s.low[-5:] *= 0.95
+    wild = ANALYSTS["volatility"]().read(s)
+    assert calm.kind == wild.kind == "risk"
+    assert wild.direction == -1.0 and "reduce risk" in wild.note
+
+
+def test_volume_confirms_a_move_on_heavy_volume():
+    s = series(np.concatenate([np.full(60, 100.0), np.linspace(100, 104, 5)]))
+    s.volume[-5:] = 400
+    r = ANALYSTS["volume"]().read(s)
+    assert r.direction > 0 and "Volume" in r.note
+
+
+def test_volume_distrusts_a_move_on_thin_volume():
+    s = series(np.concatenate([np.full(60, 100.0), np.linspace(100, 104, 5)]))
+    s.volume[-5:] = 20
+    r = ANALYSTS["volume"]().read(s)
+    assert r.direction < 0 and "thin volume" in r.note
+
+
+def test_volume_stays_silent_without_history():
+    assert ANALYSTS["volume"]().read(series(np.full(20, 1.0))) is None
