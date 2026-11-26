@@ -319,7 +319,8 @@ class Lead:
             self._post(task)
             started = time.perf_counter()
             text = await self._ask_claude(key, question, snapshot)
-            task["steps"][-1].update(status="done" if text else "failed", ms=round((time.perf_counter() - started) * 1000),
+            took = round((time.perf_counter() - started) * 1000)
+            task["steps"][-1].update(status="done" if text else "failed", ms=took,
                                      note="Answer written" if text else "Claude unavailable, answered from rules")
             source = "claude" if text else "rules"
         if not text:
@@ -388,7 +389,8 @@ class Lead:
                         for b in ov["bots"] if b["role"] == "trader"],
             "analysts": [{"name": b["name"], "accuracy": round(b["reputation"]["accuracy"], 3),
                           "weight": round(b["reputation"]["weight"], 2), "scored_calls": b["reputation"]["calls"],
-                          "by_market": {m["name"].split(":", 1)[-1]: round(m["accuracy"], 3) for m in b["trust"]["markets"]},
+                          "by_market": {m["name"].split(":", 1)[-1]: round(m["accuracy"], 3)
+                                        for m in b["trust"]["markets"]},
                           "by_regime": {r["name"]: round(r["accuracy"], 3) for r in b["trust"]["regimes"]}}
                          for b in ov["bots"] if b["role"] == "analyst"],
             "kill_switch": ov["halted"],
@@ -407,7 +409,8 @@ class Lead:
             lean = "bullish" if c.direction > 0.25 else "bearish" if c.direction < -0.25 else "split"
             text = f"{sym}: council is {lean} at {c.direction:+.2f}. {len(bulls)} analysts lean up, {len(bears)} down."
             if best and abs(best["direction"]) > 0.15:
-                text += f" Most reliable voice: {best['analyst']} ({best['accuracy']:.0%} right) says \"{best['note']}\"."
+                text += (f" Most reliable voice: {best['analyst']} ({best['accuracy']:.0%} right) "
+                         f"says \"{best['note']}\".")
             if c.risk_off > 0.3:
                 text += f" Risk warnings at {c.risk_off:.0%}: traders size down."
             holders = [b.config["name"] for b in self.engine.bots.values()
@@ -470,7 +473,8 @@ class Lead:
             b = min(weak, key=lambda x: x["pnl_pct"])
             items.append({"verb": "Review", "target": b["id"],
                           "text": f"{b['name']} is {b['pnl_pct']:+.1%} on its budget and won "
-                                  f"{b['win_rate']:.0%} of {b['trades']} trades. Its setup is not working in this market.",
+                                  f"{b['win_rate']:.0%} of {b['trades']} trades. "
+                                  "Its setup is not working in this market.",
                           "proposals": [{"id": new_id("prop"), "label": f"Pause {b['name']}",
                                          "action": {"type": "pause", "bot_id": b["id"]}}]})
         strong = [b for b in active if b["trades"] >= 6 and b["pnl_pct"] > 0.02 and (b["win_rate"] or 0) >= 0.55]
