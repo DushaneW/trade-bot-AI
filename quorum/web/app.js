@@ -858,7 +858,8 @@ const views = {
       const b = bot(id) ?? detail;
       const f = trader
         ? [["Equity", fmt.money(b.equity)], ["Return", `<span class="${fmt.tone(b.pnl)}">${fmt.pct(b.pnl_pct)}</span>`],
-           ["Win rate", b.win_rate == null ? "n/a" : `${Math.round(b.win_rate * 100)}%`], ["Budget", fmt.money(b.budget)]]
+           ["Win rate", b.win_rate == null ? "n/a" : `${Math.round(b.win_rate * 100)}%`], ["Budget", fmt.money(b.budget)],
+           ["Fees paid", fmt.money(b.fees)]]
         : [["Right", `${Math.round(b.reputation.accuracy * 100)}%`], ["Vote weight", `${b.reputation.weight.toFixed(2)}×`],
            ["Scored calls", b.reputation.calls], ["Watching", `${b.symbols.length} markets`]];
       $("#figs", el).innerHTML = f.map(([k, v]) => `<div class="fig"><small>${k}</small><b>${v}</b></div>`).join("");

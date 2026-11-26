@@ -310,7 +310,7 @@ label.option:has(input:checked) { border-color: var(--accent); background: rgb(2
 .agent-head h1 { margin: 0; font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
 .agent-head p { margin: 2px 0 0; color: var(--muted); max-width: 56ch; }
 .agent-head .actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
-.figures { max-width: 860px; margin: 14px auto 0; padding: 0 28px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.figures { max-width: 860px; margin: 14px auto 0; padding: 0 28px; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
 .fig { background: var(--raised); border-radius: 14px; padding: 12px 14px; }
 .fig small { display: block; color: var(--muted); font-size: 12.5px; }
 .fig b { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
