@@ -106,3 +106,31 @@ async def test_briefing_warns_when_prices_stop_arriving(lead, engine):
     acc.last_data = time.time() - 900
     items = lead._briefing_items()
     assert items[0]["verb"] == "Check" and "No prices from" in items[0]["text"]
+
+
+async def test_briefing_proposes_pausing_a_losing_trader_and_the_owner_applies_it(lead, engine):
+    await finished(lead)
+    loser = next(b for b in engine.bots.values() if b.config["strategy"] == "trend_rider")
+    loser.ledger.trades, loser.ledger.wins = 6, 1
+    loser.ledger.cash -= loser.ledger.budget * 0.05
+    msg = await lead.brief(force=True)
+    pause = next(p for p in msg["proposals"] if p["action"]["type"] == "pause")
+    assert pause["action"]["bot_id"] == loser.id
+    lead.apply_proposal(msg["id"], pause["id"])
+    assert not loser.config["enabled"]
+    again = lead.apply_proposal(msg["id"], pause["id"])  # a second click changes nothing
+    assert next(p for p in again["proposals"] if p["id"] == pause["id"])["applied"]
+
+
+async def test_briefing_stays_quiet_when_nothing_changed(lead, engine):
+    await finished(lead)
+    loser = next(b for b in engine.bots.values() if b.config["strategy"] == "trend_rider")
+    loser.ledger.trades, loser.ledger.wins = 6, 1
+    loser.ledger.cash -= loser.ledger.budget * 0.05
+    assert await lead.brief(force=False) is not None
+    assert await lead.brief(force=False) is None
+
+
+async def test_unknown_proposals_are_404s(lead):
+    with pytest.raises(KeyError):
+        lead.apply_proposal("nope", "nope")
