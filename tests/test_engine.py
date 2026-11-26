@@ -37,3 +37,58 @@ async def test_stopping_can_close_every_position(team):
     await engine.stop_council(close_positions=True)
     assert not engine.running
     assert not rider.ledger.position(key).is_open
+
+
+def rider_of(engine):
+    return next(b for b in engine.bots.values() if b.config["strategy"] == "trend_rider")
+
+
+async def buy(engine, acc, symbol="BTC/USDT", money=60.0):
+    rider, key = rider_of(engine), f"{acc.id}:{symbol}"
+    await engine._execute(rider, key, Side.BUY, money / engine.prices[key], "test entry")
+    return rider, key, rider.ledger.position(key)
+
+
+async def test_a_buy_places_a_backup_stop_past_the_traders_own(team):
+    engine, acc = team
+    rider, key, pos = await buy(engine, acc)
+    assert pos.stop_id and pos.stop_qty == pytest.approx(pos.qty)
+    expected = pos.avg_price * (1 - rider.limits.stop_loss_pct - 0.005)
+    assert pos.stop_price == pytest.approx(expected)
+
+
+async def test_an_exit_cancels_the_stop_before_selling(team):
+    engine, acc = team
+    rider, key, pos = await buy(engine, acc)
+    stop_id = pos.stop_id
+    await engine._execute(rider, key, Side.SELL, pos.qty, "test exit")
+    assert not rider.ledger.position(key).is_open
+    assert acc.connector.stops[stop_id]["status"] == "gone"
+
+
+async def test_a_stop_that_filled_while_away_is_booked(team):
+    engine, acc = team
+    rider, key, pos = await buy(engine, acc)
+    acc.connector.stops[pos.stop_id].update(trigger=engine.prices[key] * 10, since=0)
+    await engine._check_stops(acc)
+    fills = engine.store.fills(rider.id)
+    assert fills[0]["reason"] == "Backup stop filled on the exchange"
+    assert not rider.ledger.position(key).is_open
+
+
+async def test_a_stop_removed_on_the_exchange_is_replaced(team):
+    engine, acc = team
+    _, _, pos = await buy(engine, acc)
+    old = pos.stop_id
+    acc.connector.stops[old]["status"] = "gone"
+    await engine._check_stops(acc)
+    assert pos.stop_id and pos.stop_id != old
+
+
+async def test_turning_backup_stops_off_cancels_them(team):
+    engine, acc = team
+    _, _, pos = await buy(engine, acc)
+    old = pos.stop_id
+    await engine.set_exchange_stops(False)
+    assert not pos.stop_id and acc.connector.stops[old]["status"] == "gone"
+    assert engine.store.setting("exchange_stops") is False
