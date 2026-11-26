@@ -57,3 +57,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "quorum/api.py" = ["B008"]  # FastAPI declares request bodies with Body(...) in the signature
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning:websockets.*"]
