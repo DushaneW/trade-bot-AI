@@ -314,9 +314,13 @@ and the page says so. Each stretch also shows what the default settings and plai
 
 ## Talking to the Chair
 
-Ask things like *"What about BTC?"* or *"How are my traders doing?"*. The Chair asks every analyst on the spot
-(each takes well under a millisecond) and tells you how the vote looks, who agrees, who has been most
-reliable lately and which traders hold that market.
+Ask things like *"What about BTC?"*, *"How are my traders doing?"* or *"What are we holding?"*. The Chair asks
+every analyst on the spot (each takes well under a millisecond) and tells you how the vote looks, who agrees,
+who has been most reliable lately and which traders hold that market. Asked about holdings, it lists every open
+position with its result so far and the stop protecting it.
+
+If an exchange stops sending prices for a few minutes, the Chair says so in its next briefing and the Accounts
+page marks the account, so a silent outage doesn't look like a quiet market.
 
 Out of the box it answers with built-in rules: free, instant and offline. Add an Anthropic API key in
 **Settings** and it writes its answers with Claude instead. It sends a summary of votes and results, never
@@ -334,8 +338,9 @@ Nothing happens unless you click it.
 Connect Telegram in **Settings** and the team writes to you: every buy and sell, stop losses, a trader pausing,
 orders that fail and a short summary each evening. You choose which.
 
-It also takes commands. `/status` shows how the team is doing, `/start` and `/stop` work like the button in
-the dashboard, and `/stop close` stops and sells everything.
+It also takes commands. `/status` shows how the team is doing, `/positions` lists what is held and where each
+stop sits, `/start` and `/stop` work like the button in the dashboard, and `/stop close` stops and sells
+everything. *Send the summary now* in Settings shows you what the evening message looks like.
 
 1. In Telegram, message **@BotFather**, send `/newbot` and follow the two questions.
 2. Paste the token it gives you into Settings.
