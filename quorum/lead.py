@@ -40,6 +40,7 @@ DEFAULT_MODEL = "claude-opus-5-5"
 FIRST_BRIEFING_S = 25
 START_WORDS = re.compile(r"^\s*(start|go|begin|resume)\b", re.I)
 STOP_WORDS = re.compile(r"^\s*(stop|pause|halt)\b", re.I)
+HOLDINGS_QUESTION = re.compile(r"\b(hold|holding|holdings|position|positions|stops?|open trades?)\b", re.I)
 TRADER_QUESTION = re.compile(r"\b(trader|bot|budget|profit|loss|perform|doing|pnl|portfolio|money)", re.I)
 
 SYSTEM_PROMPT = """You are the Chair, lead of Quorum: a council of trading bots running on the owner's own computer.
@@ -278,6 +279,13 @@ class Lead:
 
     async def _answer(self, question: str) -> None:
         markets = self._match_markets(question)
+        if not markets and HOLDINGS_QUESTION.search(question):
+            lines = self.engine.describe_positions()
+            text = (f"{len(lines)} open position{'s' if len(lines) != 1 else ''}. Each has a stop resting on the "
+                    "exchange unless it says otherwise." if lines else "Nothing is held right now.")
+            items = [{"verb": "Holding", "text": line} for line in lines]
+            self._post(self._message("lead", "answer", text, items=items, source="rules"))
+            return
         if not markets and TRADER_QUESTION.search(question) and not self._claude_key():
             text, items = self._trader_answer()
             self._post(self._message("lead", "answer", text, items=items, source="rules"))

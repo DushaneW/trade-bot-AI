@@ -161,3 +161,25 @@ def test_the_testnet_box_only_appears_where_a_testnet_exists(lead):
     assert "password" in fields("okx") and "password" not in fields("binance")
     forex = {f["name"] for f in lead.onboarding._key_fields("forex", "oanda")}
     assert forex == {"api_key", "account_id", "sandbox"}
+
+
+async def test_asking_what_is_held_lists_positions_and_their_stops(lead, engine):
+    from quorum.models import Side
+
+    await finished(lead)
+
+    async def ask_and_wait(text):
+        await lead.ask(text)
+        for job in list(lead._jobs):
+            await job
+        return next(m for m in reversed(lead.history(10)) if m["kind"] == "answer")
+
+    assert (await ask_and_wait("What are we holding?"))["text"] == "Nothing is held right now."
+    rider = next(b for b in engine.bots.values() if b.config["strategy"] == "trend_rider")
+    acc = next(iter(engine.accounts.values()))
+    await engine._tick_account(acc)
+    key = f"{acc.id}:SOL/USDT"
+    await engine._execute(rider, key, Side.BUY, 60 / engine.prices[key], "test")
+    reply = await ask_and_wait("Which positions are open, and where are the stops?")
+    assert reply["text"].startswith("1 open position")
+    assert "SOL/USDT" in reply["items"][0]["text"] and "exchange stop at" in reply["items"][0]["text"]
