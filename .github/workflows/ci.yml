@@ -35,3 +35,17 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       - run: pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t quorum-council:ci .
+      - name: Refuses to start without a password
+        run: "! docker run --rm quorum-council:ci"
+      - name: Starts and answers its health check
+        run: |
+          docker run -d --name quorum-ci -e QUORUM_PASSWORD=ci-only -p 8420:8420 quorum-council:ci
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:8420/api/health && exit 0; sleep 1; done
+          docker logs quorum-ci
+          exit 1
