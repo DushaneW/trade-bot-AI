@@ -40,7 +40,8 @@ def test_regime_threshold():
 
 def test_calls_are_scored_after_the_horizon_per_market_and_regime():
     council = Council(horizon_bars=8)
-    council.hear("vector", KEY, Reading("trend", 0.8, 0.9, "up"), 100.0, ts=0, bar_ms=BAR, atr_frac=0.01, regime="trend")
+    up = Reading("trend", 0.8, 0.9, "up")
+    council.hear("vector", KEY, up, 100.0, ts=0, bar_ms=BAR, atr_frac=0.01, regime="trend")
     assert council.score({KEY: 105.0}, now=BAR * 7) == []  # not due yet
     assert council.score({KEY: 105.0}, now=BAR * 8) == [("vector", True)]
     assert council.rep("vector").hits == 1

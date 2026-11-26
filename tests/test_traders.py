@@ -38,3 +38,26 @@ def test_risk_warnings_shrink_entries():
     calm = decide("trend_rider", close, direction=0.5)
     wild = decide("trend_rider", close, direction=0.5, risk_off=1.0)
     assert wild.size < calm.size
+
+
+def dip(n=60, drop=0.08):
+    close = np.full(n, 100.0) + np.tile([0.3, -0.3], n // 2)
+    close[-1] = 100 * (1 - drop)
+    return close
+
+
+def test_mean_reverter_buys_a_sharp_dip_but_not_in_turbulence():
+    assert decide("mean_reverter", dip()).side == Side.BUY
+    assert decide("mean_reverter", dip(), risk_off=0.8) is None
+
+
+def test_mean_reverter_sells_back_at_the_mean():
+    close = np.append(dip(), 100.5)
+    assert decide("mean_reverter", close, pos=LONG).exit
+
+
+def test_breakout_buys_a_new_high_and_exits_a_new_low():
+    flat = np.full(60, 100.0) + np.tile([0.5, -0.5], 30)
+    assert decide("breakout", np.append(flat, 103)).side == Side.BUY
+    assert decide("breakout", np.append(flat, 97), pos=LONG).exit
+    assert decide("breakout", np.append(flat, 100)) is None
