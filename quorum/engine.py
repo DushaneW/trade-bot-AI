@@ -873,6 +873,22 @@ class Engine:
             },
         }
 
+    def describe_positions(self) -> list[str]:
+        """One plain sentence per open position: size, entry, result so far and the stop protecting it."""
+        lines = []
+        for bot in self.bots.values():
+            if not bot.ledger:
+                continue
+            for key, pos in bot.ledger.positions.items():
+                if not pos.is_open:
+                    continue
+                price = self.prices.get(key, pos.avg_price)
+                result = (price - pos.avg_price) * pos.qty
+                stop = f", exchange stop at {pos.stop_price:.6g}" if pos.stop_id else ", no exchange stop"
+                lines.append(f"{bot.config['name']}: {pos.qty:.6g} {key.split(':', 1)[1]} bought at "
+                             f"{pos.avg_price:.6g}, now {price:.6g} ({result:+,.2f}){stop}")
+        return lines
+
     def candles(self, key: str) -> list[float]:
         s = self.series.get(key)
         return [] if s is None else [float(x) for x in s.close[-160:]]
