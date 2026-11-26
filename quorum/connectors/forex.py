@@ -31,7 +31,8 @@ class OandaConnector(Connector):
         for c in r.json().get("candles", []):
             m = c["mid"]
             ts = int(datetime.fromisoformat(c["time"][:26].rstrip("Z") + "+00:00").timestamp() * 1000)
-            out.append(Candle(ts, float(m["o"]), float(m["h"]), float(m["l"]), float(m["c"]), float(c.get("volume", 0))))
+            out.append(Candle(ts, float(m["o"]), float(m["h"]), float(m["l"]), float(m["c"]),
+                              float(c.get("volume", 0))))
         return out
 
     async def check(self) -> KeyCheck:

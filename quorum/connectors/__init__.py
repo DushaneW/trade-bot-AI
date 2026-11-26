@@ -22,7 +22,8 @@ VENUE_NAMES = {
 NEEDS_PASSPHRASE = {"okx", "kucoin", "bitget"}
 
 SUGGESTED_MARKETS = {
-    "crypto": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT"],
+    "crypto": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "AVAX/USDT",
+               "LINK/USDT"],
     "stocks": ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "META"],
     "forex": ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CHF", "EUR_GBP"],
 }

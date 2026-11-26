@@ -319,5 +319,7 @@ class Notifier:
             await self.engine.stop_council(close_positions=close)
             self.lead.say("Stopped from Telegram." + (" Every position was closed." if close else ""))
         else:
-            await self._reply(chat, "/status  how the team is doing\n/start  let the council trade\n"
-                                    "/stop  stop, keep positions and their stop losses\n/stop close  stop and sell everything")
+            await self._reply(chat, "/status  how the team is doing\n"
+                                    "/start  let the council trade\n"
+                                    "/stop  stop, keep positions and their stop losses\n"
+                                    "/stop close  stop and sell everything")
