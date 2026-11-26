@@ -61,3 +61,33 @@ def test_breakout_buys_a_new_high_and_exits_a_new_low():
     assert decide("breakout", np.append(flat, 103)).side == Side.BUY
     assert decide("breakout", np.append(flat, 97), pos=LONG).exit
     assert decide("breakout", np.append(flat, 100)) is None
+
+
+def test_accumulator_buys_on_its_schedule_and_doubles_when_oversold():
+    trader = TRADERS["accumulator"]({"every": 3})
+    flat = series(np.full(80, 100.0) + np.tile([0.2, -0.2], 40))
+    intents = [trader.decide(flat, FLAT, Consensus()) for _ in range(6)]
+    buys = [i for i in intents if i]
+    assert len(buys) == 2 and all(i.side == Side.BUY for i in buys)
+    falling = series(np.linspace(120, 100, 80))
+    big = TRADERS["accumulator"]({"every": 1}).decide(falling, FLAT, Consensus())
+    assert "double slice" in big.reason
+
+
+def test_accumulator_takes_profit():
+    intent = decide("accumulator", np.full(80, 107.0), pos=LONG)
+    assert intent.exit and "Take profit" in intent.reason
+
+
+def test_council_follower_only_trades_a_strong_calm_vote():
+    close = np.full(80, 100.0)
+    assert decide("council", close, direction=0.5).side == Side.BUY
+    assert decide("council", close, direction=0.2) is None
+    assert decide("council", close, direction=0.5, risk_off=0.6) is None
+    assert decide("council", close, pos=LONG, direction=-0.1).exit
+
+
+def test_every_trader_has_something_to_tune_in_walk_forward():
+    for key, cls in TRADERS.items():
+        assert cls.tunable, key
+        assert set(cls.tunable) <= set(cls.defaults), key
