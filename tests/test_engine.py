@@ -92,3 +92,32 @@ async def test_turning_backup_stops_off_cancels_them(team):
     await engine.set_exchange_stops(False)
     assert not pos.stop_id and acc.connector.stops[old]["status"] == "gone"
     assert engine.store.setting("exchange_stops") is False
+
+
+async def test_correlated_second_entry_is_trimmed(team):
+    engine, acc = team
+    btc, eth = f"{acc.id}:BTC/USDT", f"{acc.id}:ETH/USDT"
+    await buy(engine, acc, "BTC/USDT", money=90)
+    engine.correlation[acc.id][(eth, btc)] = 0.9  # simulated markets are independent; make these move as one
+    rider = rider_of(engine)
+    await engine._execute(rider, eth, Side.BUY, 90 / engine.prices[eth], "test")
+    fill = engine.store.fills(rider.id)[0]
+    assert "move with this one" in fill["reason"]
+    assert fill["qty"] * fill["price"] < 90
+
+
+async def test_positions_and_stops_survive_a_restart(team, tmp_path, bus):
+    from quorum.engine import Engine
+    from quorum.security import Vault
+    from quorum.storage import Store
+
+    engine, acc = team
+    rider, key, pos = await buy(engine, acc)
+    engine._persist()
+    again = Engine(Store(tmp_path / "q.db"), Vault(tmp_path), bus)
+    await again.start()
+    again._task.cancel()
+    restored = again.bots[rider.id].ledger.position(key)
+    assert restored.qty == pytest.approx(pos.qty) and restored.stop_id == pos.stop_id
+    assert again.running  # the owner had started the council before the restart
+    await again.stop()
