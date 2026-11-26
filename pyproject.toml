@@ -17,6 +17,10 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 dependencies = [
@@ -32,6 +36,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/DushaneW/trade-bot-AI"
 Issues = "https://github.com/DushaneW/trade-bot-AI/issues"
+Changelog = "https://github.com/DushaneW/trade-bot-AI/blob/main/CHANGELOG.md"
 
 [project.scripts]
 quorum = "quorum.__main__:main"
