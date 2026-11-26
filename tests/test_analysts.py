@@ -31,3 +31,22 @@ def test_price_str_keeps_useful_precision():
     assert price_str(64123.456) == "64,123.46"
     assert price_str(1.08512) == "1.0851"
     assert price_str(0.0001234) == "0.000123"
+
+
+def test_momentum_flags_overbought_and_oversold():
+    up = read("momentum", np.linspace(100, 160, 120))
+    down = read("momentum", np.linspace(160, 100, 120))
+    assert up.direction < 0 and "Overbought" in up.note
+    assert down.direction > 0 and "Oversold" in down.note
+
+
+def test_divergence_spots_a_higher_high_on_weaker_momentum():
+    # A sharp rally, a pullback, then a slow grind to a marginally higher high.
+    close = np.concatenate([np.full(40, 100.0), np.linspace(100, 120, 8), np.linspace(120, 110, 8),
+                            np.linspace(110, 121, 14)])
+    r = read("divergence", close)
+    assert r.direction < 0 and "Bearish divergence" in r.note
+
+
+def test_divergence_is_quiet_on_a_clean_trend():
+    assert read("divergence", trend(120)).direction == 0.0
