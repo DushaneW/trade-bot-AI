@@ -93,3 +93,44 @@ async def test_a_second_bot_of_the_same_kind_gets_a_numbered_name(team):
     bot = engine.create_bot({"strategy": "momentum", "account_id": next(iter(engine.accounts)),
                              "symbols": ["BTC/USDT"]})
     assert bot.config["name"] == "Tempo 2"
+
+
+async def test_a_fee_taken_in_the_bought_coin_is_booked_as_less_coin(team, monkeypatch):
+    engine, acc = team
+    bot, key = trader(engine), f"{acc.id}:BTC/USDT"
+    price = engine.prices[key]
+
+    async def binance_style(symbol, side, qty):
+        return ExecResult(price, qty, qty * price * 0.001, fee_base=qty * 0.001)
+    monkeypatch.setattr(acc.connector, "market_order", binance_style)
+    await engine._execute(bot, key, Side.BUY, 60 / price, "test")
+    pos = bot.ledger.position(key)
+    fill = engine.store.fills(bot.id)[0]
+    assert pos.qty == pytest.approx(fill["qty"])
+    assert pos.qty == pytest.approx(60 / price * 0.999, rel=1e-3)
+
+
+async def test_a_crumb_left_after_selling_is_written_off(team, monkeypatch):
+    engine, acc = team
+    bot, key = await hold(engine, acc)
+    held = bot.ledger.position(key).qty
+    real = acc.connector.market_order
+
+    async def leaves_dust(symbol, side, qty):
+        return await real(symbol, side, qty * 0.999)  # the exchange sold a hair less than asked
+    monkeypatch.setattr(acc.connector, "market_order", leaves_dust)
+    await engine._execute(bot, key, Side.SELL, held, "test exit")
+    assert bot.ledger.position(key).qty == 0  # no crumb left for exits to retry forever
+
+
+async def test_a_failed_order_is_reported_and_the_stop_put_back(team, monkeypatch):
+    engine, acc = team
+    bot, key = await hold(engine, acc)
+
+    async def refuse(symbol, side, qty):
+        raise RuntimeError("insufficient balance")
+    monkeypatch.setattr(acc.connector, "market_order", refuse)
+    await engine._execute(bot, key, Side.SELL, bot.ledger.position(key).qty, "test exit")
+    errors = [m["data"]["message"] for m in engine.bus.history if m["topic"] == "error"]
+    assert errors[-1] == "Order failed: insufficient balance"
+    assert bot.ledger.position(key).is_open and bot.ledger.position(key).stop_id
