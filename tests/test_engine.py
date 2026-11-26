@@ -175,3 +175,15 @@ async def test_analysts_added_later_join_an_existing_team(team, tmp_path, bus):
     again = await restart_with(tmp_path, bus, lambda cfg: None)
     assert "order_book" in {b.config["strategy"] for b in again.bots.values()}
     await again.stop()
+
+
+async def test_an_account_without_prices_for_minutes_is_stale(team):
+    import time
+
+    engine, acc = team
+    assert not acc.stale()
+    acc.last_data = time.time() - 600
+    assert acc.stale()
+    assert acc.public()["data_age"] >= 600
+    acc.last_data = 0
+    assert not acc.stale()  # never fetched yet is not an outage

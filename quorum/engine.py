@@ -29,6 +29,7 @@ from .storage import Store
 log = logging.getLogger(__name__)
 
 EQUITY_EVERY_S = 10
+STALE_AFTER_S = 180   # no market data for this long counts as an outage
 STOP_CHECK_S = 20     # how often resting exchange stops are looked up
 STOP_MARGIN = 0.005   # the exchange stop sits this much past the trader's own stop: a backup, not a rival
 STOP_RETRY_S = 300    # after a refused stop, wait this long before trying again
@@ -49,6 +50,7 @@ class AccountRuntime:
     status: KeyCheck | None = None
     last_poll: float = 0.0
     last_stop_check: float = 0.0
+    last_data: float = 0.0  # wall-clock time of the last successful market data fetch
     error: str | None = None
 
     @property
@@ -70,7 +72,15 @@ class AccountRuntime:
                 "balance": self.status.balance_quote,
             },
             "error": self.error,
+            "data_age": round(time.time() - self.last_data) if self.last_data else None,
         }
+
+    def stale(self, now: float | None = None) -> bool:
+        """True when prices have not arrived for a while, so decisions run on old data."""
+        if not self.last_data:
+            return False
+        limit = max(STALE_AFTER_S, self.connector.poll_seconds * 3)
+        return (now or time.time()) - self.last_data > limit
 
 
 @dataclass
@@ -468,6 +478,7 @@ class Engine:
                         else:
                             await self._guard_open_positions(acc)
                         acc.error = None if (acc.status and acc.status.ok) else acc.error
+                        acc.last_data = time.time()
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:

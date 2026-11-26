@@ -96,3 +96,13 @@ async def test_questions_about_traders_get_a_rule_answer(lead, engine):
         await job
     reply = lead.history(5)[-1]
     assert reply["kind"] == "answer" and "traders manage" in reply["text"]
+
+
+async def test_briefing_warns_when_prices_stop_arriving(lead, engine):
+    import time
+
+    await finished(lead)
+    acc = next(iter(engine.accounts.values()))
+    acc.last_data = time.time() - 900
+    items = lead._briefing_items()
+    assert items[0]["verb"] == "Check" and "No prices from" in items[0]["text"]

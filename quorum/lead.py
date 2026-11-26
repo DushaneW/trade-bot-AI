@@ -446,6 +446,14 @@ class Lead:
         items: list[dict] = []
         now = now_ms()
 
+        for acc in self.engine.accounts.values():
+            if acc.stale():
+                minutes = (time.time() - acc.last_data) / 60
+                items.append({"verb": "Check", "target": acc.id,
+                              "text": f"No prices from {acc.record['name']} for {minutes:.0f} minutes, so the team is "
+                                      "not trading there. Open positions keep their stops on the exchange. "
+                                      "Check the internet connection and the Accounts page."})
+
         hot = []
         for key, m in ov["markets"].items():
             if m["voices"] >= 3 and abs(m["direction"]) > 0.35:

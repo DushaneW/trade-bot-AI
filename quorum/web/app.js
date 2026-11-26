@@ -1396,6 +1396,7 @@ const views = {
 function statusTag(a) {
   if (!a.status) return `<span class="tag">checking</span>`;
   if (!a.status.ok) return `<span class="tag bad">not working</span>`;
+  if (a.data_age > 180 && state.overview?.running) return `<span class="tag bad" title="Open positions keep their exchange stops">no prices for ${Math.round(a.data_age / 60)} min</span>`;
   if (a.venue === "sim") return `<span class="tag">simulator</span>`;
   if (!a.status.can_trade) return `<span class="tag">prices only</span>`;
   return `<span class="tag ok">ready</span>`;
