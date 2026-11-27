@@ -451,7 +451,7 @@ quorum/
     └── web/               the dashboard
 ```
 
-To work on Quorum itself:
+To work on Quorum itself :
 
 ```bash
 pip install -e ".[dev]"
